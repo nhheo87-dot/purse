@@ -186,6 +186,14 @@ nav.tabs svg{width:22px;height:22px;padding:4px 12px;box-sizing:content-box;bord
 .todaybar b{color:var(--ink)}
 .todaybar.away{background:#fff4e0;border:1px solid #f0d199}
 @media (prefers-color-scheme:dark){.todaybar.away{background:#3a3020;border-color:#6b5525}}
+.calc-hint{position:fixed;z-index:90;background:var(--ink);color:var(--bg);font-size:13px;font-weight:600;padding:4px 10px;border-radius:8px;pointer-events:none;white-space:nowrap}
+.calc-hint[hidden]{display:none}
+/* 앱 잠금 */
+.lock{position:fixed;inset:0;z-index:100;background:var(--bg);display:flex;align-items:center;justify-content:center}
+.lock[hidden]{display:none}
+.lock-box{width:min(320px,88%);display:flex;flex-direction:column;gap:10px;text-align:center}
+.lock-box h2{margin:4px 0 0}
+.lock-box input{text-align:center;font-size:18px;padding:12px}
 /* 보험 */
 .ins-cov{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr) minmax(0,1fr) 32px;gap:4px;align-items:center;padding:4px 0;border-top:1px solid var(--line)}
 .ins-cov input,.ins-cov select{width:100%;min-width:0;padding:8px 6px;font-size:16px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
@@ -348,6 +356,15 @@ label.mini input{width:16px;height:16px;accent-color:var(--accent)}
   <form class="sheet-panel" id="sheetForm" autocomplete="off"></form>
 </div>
 <div class="toast" id="toast" role="status"></div>
+<div id="lockScreen" class="lock" hidden><form id="lockForm" class="lock-box" autocomplete="on">
+  <svg viewBox="0 0 1024 1024" width="72" height="72" aria-hidden="true" style="margin:0 auto"><rect width="1024" height="1024" rx="230" fill="#1f6f5c"/><rect x="250" y="250" width="524" height="270" rx="80" fill="#e8b04b"/><rect x="214" y="374" width="620" height="440" rx="90" fill="#185a4a"/><rect x="190" y="350" width="620" height="440" rx="90" fill="#f7f4ec"/><rect x="560" y="500" width="300" height="140" rx="70" fill="#e8b04b"/><circle cx="675" cy="570" r="35" fill="#f7f4ec"/></svg>
+  <h2>Purse</h2><p class="muted">비밀번호를 입력하세요</p>
+  <input type="text" name="username" value="Purse" autocomplete="username" hidden>
+  <input type="password" id="lockPw" autocomplete="current-password" aria-label="비밀번호">
+  <button class="btn primary" id="lockGo">열기</button>
+  <p class="muted" id="lockMsg" style="min-height:1.4em;margin:0"></p>
+  <button type="button" class="btn sm" id="lockForgot" style="margin-top:20px">비밀번호를 잊었어요</button>
+</form></div>
 
 <script>
 'use strict';
@@ -473,11 +490,31 @@ function migrate(d){
   s.v = 3;
   return s;
 }
+/* 앱 잠금: 켜면 이 기기에 저장되는 데이터 전체를 비밀번호(AES-256)로 암호화 */
+let appLock = null;     // {pw, salt, key} — 잠금 해제된 동안만 메모리에
+let lockedBlob = null;  // 잠금 상태에서 읽은 암호문 (해제 전에는 저장 안 함)
+let saveChain = Promise.resolve();
 function load(){
-  try{ const raw = localStorage.getItem(KEY); if(raw) return migrate(JSON.parse(raw)); }catch(e){}
+  try{ const raw = localStorage.getItem(KEY); if(raw){ const d = JSON.parse(raw); if(d && d.lock === 1 && d.data){ lockedBlob = d; return fresh(); } return migrate(d); } }catch(e){}
   return fresh();
 }
+async function sealState(str){
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({name:'AES-GCM', iv}, appLock.key, new TextEncoder().encode(str));
+  return {lock: 1, v: 1, salt: b64(appLock.salt), iv: b64(iv), data: b64(new Uint8Array(ct))};
+}
+async function openBlob(d, key){
+  const pt = await crypto.subtle.decrypt({name:'AES-GCM', iv: unb64(d.iv)}, key, unb64(d.data));
+  return JSON.parse(new TextDecoder().decode(pt));
+}
 function save(){
+  if(lockedBlob) return; // 잠금 풀기 전에는 절대 덮어쓰지 않음
+  if(appLock){
+    const str = JSON.stringify(S), lk = appLock;
+    saveChain = saveChain.then(async () => { if(appLock !== lk) return; localStorage.setItem(KEY, JSON.stringify(await sealState(str))); })
+      .catch(() => toast('저장하지 못했어요. 기기 저장공간을 확인하세요.'));
+    return;
+  }
   try{ localStorage.setItem(KEY, JSON.stringify(S)); }
   catch(e){ toast('저장하지 못했어요. 기기 저장공간을 확인하세요.'); }
 }
@@ -492,7 +529,18 @@ const short = n => { n = Math.round(n||0); const a = Math.abs(n);
   return won(n); };
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,8);
-const digits = v => parseInt(String(v).replace(/[^\d]/g,''), 10) || 0;
+/* 금액 칸 계산식: 3000+7000, 12000*3, (5000+2000)/2 … (eval 없이 직접 계산) */
+function calcExpr(v){
+  const s = String(v).replace(/[,\s원]/g,'').replace(/[×xX]/g,'*').replace(/÷/g,'/').replace(/[^\d+\-*/().]/g,'').replace(/[+\-*/(.]+$/,'');
+  let i = 0;
+  const num = () => { if(s[i] === '('){ i++; const v = expr(); if(s[i] === ')') i++; return v; } if(s[i] === '-'){ i++; return -num(); } if(s[i] === '+'){ i++; return num(); }
+    const m = /^\d+(\.\d+)?/.exec(s.slice(i)); if(!m) throw 0; i += m[0].length; return +m[0]; };
+  const term = () => { let v = num(); while(s[i] === '*' || s[i] === '/'){ const o = s[i++], r = num(); v = o === '*' ? v * r : (r ? v / r : 0); } return v; };
+  const expr = () => { let v = term(); while(s[i] === '+' || s[i] === '-'){ const o = s[i++], r = term(); v = o === '+' ? v + r : v - r; } return v; };
+  try{ const v = expr(); return isFinite(v) ? Math.round(v) : 0; }catch(e){ return 0; }
+}
+const isExpr = v => { const s = String(v).trim(); if(/^\d{4}-\d{1,2}(-\d{1,2})?$/.test(s)) return false; return /[+*/×÷]/.test(s) || /\d\s*-\s*[\d(]/.test(s) || /\d\s*[xX]\s*\d/.test(s); };
+const digits = v => isExpr(v) ? Math.min(Math.abs(calcExpr(v)), 9e12) : (parseInt(String(v).replace(/[^\d]/g,''), 10) || 0);
 const sdigits = v => { const s = String(v).trim(); const n = digits(s); return s.startsWith('-') ? -n : n; };
 const dec = v => parseFloat(String(v).replace(/,/g,'')) || 0;
 const num = v => Number.isFinite(+v) ? +v : 0;
@@ -620,15 +668,16 @@ function renderSummary(){
     <div class="card sum"><span>잔액</span><b>${won(i-e-s)}</b></div>`;
 }
 
+const backupDue = () => (S.tx.length > 0 || insList().length > 0) && (!S.lastBackup || Date.now() - S.lastBackup > 7*864e5);
 /* ----- 내역 ----- */
 function renderList(){
-  const needBackup = S.tx.length > 0 && (!S.lastBackup || Date.now()-S.lastBackup > 30*864e5);
+  const needBackup = backupDue();
   const left = isCurMonth() ? activeRec().filter(r => !recTx(r)) : [];
   const overdue = left.filter(r => dday(recDue(r)) < 0).length;
   $('#view').innerHTML = `
     ${isIOS && !isStandalone ? `<div class="banner"><span><b>홈 화면에 추가해서 쓰세요.</b> Safari 탭에서 쓰면 한동안 안 열 때 데이터가 지워질 수 있어요.</span></div>`:''}
     ${left.length ? `<div class="banner"><span>${M}월 고정지출 ${left.length}건 남았어요 (${won(left.reduce((s,r)=>s+r.amount,0))}원)${overdue?` · <b class="exp">${overdue}건 날짜 지남</b>`:''}</span><button data-view="fixed">확인</button></div>`:''}
-    ${needBackup ? `<div class="banner"><span>${S.lastBackup?'마지막 백업 후 한 달이 지났어요.':'아직 백업한 적이 없어요.'}</span><button data-view="settings">백업하기</button></div>`:''}
+    ${needBackup ? `<div class="banner"><span>${S.lastBackup?`마지막 백업 후 ${Math.floor((Date.now()-S.lastBackup)/864e5)}일 지났어요.`:'아직 백업한 적이 없어요.'}</span><button data-view="settings">백업하기</button></div>`:''}
     <div class="toolbar">
       <input type="search" id="q" placeholder="검색 (메모·카테고리)" value="${esc(q)}">
       <div class="seg">${[['all','전체'],['fixed','고정'],['variable','변동'],['income','수입'],['saving','저축']].map(([k,l])=>`<button data-filt="${k}" class="${filt===k?'on':''}">${l}</button>`).join('')}</div>
@@ -759,8 +808,10 @@ function renderStats(){
     ${up.ev.length ? up.html + `<div class="bar-cap"><span>나갈 돈 합계</span><b class="exp">${won(up.out)}원</b></div>` : '<p class="note">2주 안에 나갈 고정지출·카드 대금이 없어요. 예산·고정 탭에서 매달 나가는 항목과 카드 결제일을 등록하면 여기에 날짜별로 보여요.</p>'}</section>`;
   const td = new Date();
   const todayBar = `<div class="todaybar${cur ? '' : ' away'}"><span>오늘 <b>${td.getFullYear()}년 ${td.getMonth()+1}월 ${td.getDate()}일 (${DOW[td.getDay()]})</b>${cur ? ` · ${M}월 ${days - td.getDate()}일 남음` : ` · 지금 <b>${Y}년 ${M}월</b>을 보고 있어요`}</span>${cur ? '' : '<button class="btn sm primary" id="goToday">오늘로 이동</button>'}</div>`;
+  const bkBanner = backupDue() ? `<div class="banner"><span>${S.lastBackup ? `마지막 백업 후 ${Math.floor((Date.now()-S.lastBackup)/864e5)}일 지났어요` : '아직 백업 파일이 없어요'}${appLock ? ' (앱 비밀번호로 암호화)' : ''}</span><button id="quickBackup">지금 백업</button></div>` : '';
   $('#view').innerHTML = `
     ${todayBar}
+    ${bkBanner}
     ${nw}
     ${hero}
     ${upc}
@@ -802,13 +853,13 @@ function openBudget(){
   const lastBy = {}; for(const t of S.tx) if(t.date.startsWith(prev)) lastBy[t.type + '|' + t.cat] = (lastBy[t.type + '|' + t.cat]||0) + t.amount;
   const row = (label, key, val, last, ph) => { const type = key.startsWith('i:') ? 'income' : 'expense';
     return `<div class="bk-row bk3"><input class="bkname" value="${esc(catLabel(label))}" maxlength="24" data-bkname="${esc(key)}" data-ctype="${type}" aria-label="카테고리 이름">
-      <small>지난달 ${short(last||0)}</small><input inputmode="numeric" data-money data-bk="${esc(key)}" value="${val != null ? won(val) : ''}" placeholder="${ph||'0'}"></div>`; };
+      <small>지난달 ${short(last||0)}</small><input inputmode="tel" autocomplete="off" data-money data-bk="${esc(key)}" value="${val != null ? won(val) : ''}" placeholder="${ph||'0'}"></div>`; };
   showSheet(`${sheetHead(`월 예산 설정`)}
     <p class="note">매달 같은 예산이 적용되고, 바꾸면 이번 달부터 반영돼요. 카테고리 <b>이름</b>은 고치는 즉시 반영돼요. 고정 항목은 비워 두면 '매달 나가는 항목' 금액이 자동으로 예산이 돼요.</p>
     <div class="row"><button type="button" class="btn sm" id="fillLast">지난달 실사용으로 채우기</button><button type="button" class="btn sm" id="fill3">최근 3개월 평균으로 채우기</button><button type="button" class="btn sm" id="fillClear">모두 비우기</button></div>
     <div class="bk-g">수입</div>${S.cats.income.map(c => row(c, 'i:' + c, S.budgets['i:' + c], lastBy['income|' + c])).join('')}
     ${S.groups.map(g => `<div class="bk-g">${esc(g.name)}${g.fixed ? ' · 고정' : ''}</div>${g.cats.map(c => row(c, c, S.budgets[c], lastBy['expense|' + c], recBudget(c) ? won(recBudget(c)) + ' (자동)' : '0')).join('')}`).join('')}
-    ${S.assets.savings.length ? `<div class="bk-g">저축 목표 (월 저금액)</div>${S.assets.savings.map(a => `<div class="bk-row"><span>${esc(a.name)}</span><small>지난달 ${short(S.tx.filter(t=>t.type==='saving'&&t.target===a.id&&t.date.startsWith(prev)).reduce((s,t)=>s+t.amount,0))}</small><input inputmode="numeric" data-money data-bsav="${a.id}" value="${a.monthly ? won(a.monthly) : ''}" placeholder="0"></div>`).join('')}` : ''}
+    ${S.assets.savings.length ? `<div class="bk-g">저축 목표 (월 저금액)</div>${S.assets.savings.map(a => `<div class="bk-row"><span>${esc(a.name)}</span><small>지난달 ${short(S.tx.filter(t=>t.type==='saving'&&t.target===a.id&&t.date.startsWith(prev)).reduce((s,t)=>s+t.amount,0))}</small><input inputmode="tel" autocomplete="off" data-money data-bsav="${a.id}" value="${a.monthly ? won(a.monthly) : ''}" placeholder="0"></div>`).join('')}` : ''}
     <div class="actions"><span class="bk-tot-inline"><small>지출 예산 합계</small><b id="bkTotal">-</b></span><button type="submit" class="btn primary">예산 저장</button></div>`, 'budget');
   updBkTotal();
 }
@@ -923,7 +974,7 @@ function budgetRow(label, key, b, x, auto, good, mem){
   const bv = has ? +b : (auto ? recBudget(label) : 0);
   return `<div class="budget-row">
     <div><span class="dot" style="background:${catColor(label)}"></span> <button type="button" class="cname" data-cren="${esc(label)}" data-ctype="${key.startsWith('i:') ? 'income' : 'expense'}" title="이름 고치기">${esc(catLabel(label))}<i>✎</i></button><br><small>실행 <b style="color:var(--ink)">${won(x)}</b>${bv?` / 예산 ${won(bv)}${auto?' (자동)':''} · ${good ? (x>=bv?'<span style="color:var(--accent)">달성</span>':`${won(bv-x)} 부족`) : (x>bv?`<span class="exp">${won(x-bv)} 초과</span>`:`${won(bv-x)} 남음`)}`:''}</small></div>
-    <input inputmode="numeric" data-budget="${esc(key)}" placeholder="${auto?won(bv)+' (자동)':'예산 입력'}" value="${has?won(b):''}" aria-label="${esc(catFull(label))} 예산">
+    <input inputmode="tel" autocomplete="off" data-budget="${esc(key)}" placeholder="${auto?won(bv)+' (자동)':'예산 입력'}" value="${has?won(b):''}" aria-label="${esc(catFull(label))} 예산">
     ${bv||x?`<div class="bar dual ${!good&&bv&&x>bv?'over':''}"><div style="width:${Math.min(100,x/Math.max(bv,x,1)*100)}%;background:${catColor(label)}"></div>${bv?`<i style="left:calc(${bv/Math.max(bv,x)*100}% - 1px)"></i>`:''}</div>`:''}
   </div>`;
 }
@@ -1201,7 +1252,7 @@ function renderIns(){
 }
 const insCoverRow = c => `<div class="ins-cov"><select data-cv="cat" aria-label="보장 분류">${INS_CATS.map(x => `<option ${c.cat === x ? 'selected' : ''}>${x}</option>`).join('')}</select>
   <input data-cv="name" maxlength="30" placeholder="담보명" value="${esc(c.name || '')}" aria-label="담보명">
-  <input data-cv="amount" inputmode="numeric" data-money placeholder="가입금액" value="${c.amount ? won(c.amount) : ''}" aria-label="가입금액">
+  <input data-cv="amount" inputmode="tel" autocomplete="off" data-money placeholder="가입금액" value="${c.amount ? won(c.amount) : ''}" aria-label="가입금액">
   <button type="button" class="icon sm" data-cvdel aria-label="삭제">×</button></div>`;
 function openIns(id){
   const p = id ? insList().find(x => x.id === id) : null; ctx = {id: p ? p.id : null};
@@ -1214,14 +1265,14 @@ function openIns(id){
       <label class="field"><span>종류</span><select id="inType">${INS_TYPES.map(t => `<option ${v('type','보장성') === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label></div>
     <div class="two"><label class="field"><span>피보험자 (보장받는 사람)</span><input type="text" id="inWho" list="insPeople" maxlength="12" value="${esc(v('who'))}"></label>
       <label class="field"><span>계약자 (내는 사람)</span><input type="text" id="inPayer" list="insPeople" maxlength="12" value="${esc(v('payer'))}"></label></div>
-    <div class="two"><label class="field"><span>월 보험료</span><input id="inPrem" inputmode="numeric" data-money value="${v('premium') ? won(p.premium) : ''}"></label>
+    <div class="two"><label class="field"><span>월 보험료</span><input id="inPrem" inputmode="tel" autocomplete="off" data-money value="${v('premium') ? won(p.premium) : ''}"></label>
       <label class="field"><span>납입일 (매월)</span><input id="inDay" inputmode="numeric" maxlength="2" value="${v('payDay')}"></label></div>
     <div class="two"><label class="field"><span>가입일</span><input type="date" id="inStart" value="${v('start')}"></label>
       <label class="field"><span>납입 종료일</span><input type="date" id="inPayEnd" value="${v('payEnd')}"></label></div>
     <div class="two"><label class="field"><span>보장 만기일</span><input type="date" id="inMat" value="${v('maturity')}"></label>
       <label class="field"><span>다음 갱신일 (갱신형만)</span><input type="date" id="inRenew" value="${v('renew')}"></label></div>
     <div class="two"><label class="field"><span>상태</span><select id="inSt">${Object.entries(INS_ST).map(([k,l]) => `<option value="${k}" ${v('status','active') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-      <label class="field"><span>해지환급금 (현재)</span><input id="inRef" inputmode="numeric" data-money value="${v('refund') ? won(p.refund) : ''}"></label></div>
+      <label class="field"><span>해지환급금 (현재)</span><input id="inRef" inputmode="tel" autocomplete="off" data-money value="${v('refund') ? won(p.refund) : ''}"></label></div>
     <div class="bk-g">가입 담보 <small class="muted">분류 · 담보명 · 가입금액</small></div>
     <div id="inCovers">${(p ? p.covers || [] : [{cat:'암진단'}]).map(insCoverRow).join('')}</div>
     <button type="button" class="btn sm" id="inCovAdd">+ 담보 추가</button>
@@ -1332,6 +1383,14 @@ function renderSettings(){
     : `<p class="note">아이폰과 아이패드에 <b>똑같은 동기화 비밀번호</b>를 한 번씩 설정하세요. 주고받는 파일이 이 비밀번호로 암호화돼요.</p>
       <form class="inline" id="syncPwForm"><input type="password" id="syncPw" placeholder="동기화 비밀번호 (6자 이상)" autocomplete="new-password"><button class="btn primary">설정</button></form>`}
     </section>
+    <section class="card"><h3>🔒 앱 잠금 (이 기기)</h3>
+      ${appLock ? `<p class="note"><b class="ok">켜져 있어요.</b> 앱을 열 때마다 비밀번호를 물어요. 이 기기에 저장된 데이터도 이 비밀번호로 암호화돼 있어요.</p>
+        <label class="field"><span>다른 앱에 갔다 돌아오면</span><select id="lockAfterSel">${[[0,'바로 잠금'],[1,'1분 뒤 잠금'],[5,'5분 뒤 잠금'],[30,'30분 뒤 잠금']].map(([v,l]) => `<option value="${v}" ${lockAfter() === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        <div class="row"><button class="btn" id="lockNow">지금 잠그기</button><button class="btn" id="lockChange">비밀번호 변경</button><button class="btn danger" id="lockOff">잠금 끄기</button></div>`
+      : `<p class="note">앱을 열 때 비밀번호를 묻고, 이 기기에 저장된 데이터를 비밀번호로 암호화해요. 기기마다 따로 설정해요 (예: PC만 잠그기).</p>
+        <form id="appLockForm"><div class="two"><input type="password" id="alPw" placeholder="비밀번호 (4자 이상)" autocomplete="new-password"><input type="password" id="alPw2" placeholder="한 번 더 입력" autocomplete="new-password"></div><button class="btn primary" style="margin-top:8px">잠금 설정</button></form>`}
+      <p class="note exp">비밀번호를 잊으면 데이터와 그 비밀번호로 만든 백업 파일을 되살릴 수 없어요.</p>
+    </section>
     <section class="card"><h3>📥 엑셀 가계부 불러오기</h3>
       <p class="note">쓰던 엑셀 파일(.xlsx)을 고르면 <b>이 기기 안에서만</b> 읽어서 카테고리 구조·자산·대출·월별 금액·예산·적립 통장·가족계를 가져와요. 파일은 어디로도 전송되지 않아요. 적용 전에 미리보기로 확인할 수 있어요.</p>
       <label class="btn primary file-btn">엑셀 파일 선택<input type="file" id="xlFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></label>
@@ -1346,7 +1405,7 @@ function renderSettings(){
       ${S.cards.map((c,i)=>`<div class="cat-row wrap"><span>💳</span>
         <input value="${esc(c.name)}" maxlength="20" data-cardname="${i}" aria-label="카드 이름">
         <select data-payday="${i}" aria-label="결제일"><option value="0">결제일 미정</option>${Array.from({length:31},(_,d)=>`<option value="${d+1}" ${c.payDay===d+1?'selected':''}>매월 ${d+1}일</option>`).join('')}</select>
-        <input class="tgt" inputmode="numeric" data-money data-cardtarget="${i}" value="${c.target?won(c.target):''}" placeholder="월 실적" aria-label="월 실적 목표">
+        <input class="tgt" inputmode="tel" autocomplete="off" data-money data-cardtarget="${i}" value="${c.target?won(c.target):''}" placeholder="월 실적" aria-label="월 실적 목표">
         <button class="icon sm" data-delcard="${i}" aria-label="삭제">×</button></div>`).join('')}
       <form class="inline" data-addcat="cards"><input type="text" maxlength="20" placeholder="예: 신한카드"><button class="btn">추가</button></form>
     </section>
@@ -1355,8 +1414,9 @@ function renderSettings(){
       <form class="inline" data-addcat="methods"><input type="text" maxlength="20" placeholder="예: 지역화폐"><button class="btn">추가</button></form>
     </section>
     <section class="card"><h3>백업 파일 (보관용)</h3>
-      <p class="note">iCloud Drive 등에 보관해 두면 기기를 잃어버려도 복구할 수 있어요. 비밀번호를 넣으면 AES-256으로 암호화돼요.</p>
-      <label class="field"><span>백업 비밀번호 (선택)</span><input type="password" id="bkPw" class="pw" autocomplete="new-password" placeholder="비워두면 암호화하지 않음"></label>
+      <p class="note">브라우저 데이터 삭제·기기 분실에 대비해 백업 파일을 iCloud Drive·PC 폴더 등에 보관하세요. 불러오면 지금 데이터와 합쳐져요(지워지지 않음).
+        <br>마지막 백업: <b>${S.lastBackup ? `${fmt(S.lastBackup)} (${Math.floor((Date.now()-S.lastBackup)/864e5)}일 전)` : '없음'}</b></p>
+      <label class="field"><span>백업 비밀번호 (선택)</span><input type="password" id="bkPw" class="pw" autocomplete="new-password" placeholder="${appLock ? '비워두면 앱 비밀번호로 암호화' : '비워두면 암호화하지 않음'}"></label>
       <div class="row">
         <button class="btn primary" id="exportBtn">백업 파일 저장</button>
         <label class="btn file-btn">백업 불러오기<input type="file" id="importFile" accept=".json,application/json"></label>
@@ -1652,7 +1712,7 @@ function submitPayDay(){
 function openSlip(){
   const e = curEarner(); const k = ym(); const sl = slipOf(e.id, k); const prev = slipOf(e.id, addMonths(k, -1));
   ctx = {earner: e.id, ym: k};
-  const field = (part, it) => `<div class="bk-row"><span>${esc(it.name)}${it.nontax ? ' <small>비과세</small>' : ''}</span><small>${prev && +((prev[part]||{})[it.name]) ? '지난달 ' + short(prev[part][it.name]) : ''}</small><input inputmode="numeric" data-money data-slip="${part}" data-nm="${esc(it.name)}" value="${sl && +((sl[part]||{})[it.name]) ? won(sl[part][it.name]) : ''}"></div>`;
+  const field = (part, it) => `<div class="bk-row"><span>${esc(it.name)}${it.nontax ? ' <small>비과세</small>' : ''}</span><small>${prev && +((prev[part]||{})[it.name]) ? '지난달 ' + short(prev[part][it.name]) : ''}</small><input inputmode="tel" autocomplete="off" data-money data-slip="${part}" data-nm="${esc(it.name)}" value="${sl && +((sl[part]||{})[it.name]) ? won(sl[part][it.name]) : ''}"></div>`;
   showSheet(`${sheetHead(`${esc(e.name)} · ${M}월 급여 명세`)}
     <div class="two"><label class="field"><span>지급일</span><input type="date" id="slDate" value="${sl && sl.date ? sl.date : payDateFor(e, k)}"></label>
       <div class="field"><span>&nbsp;</span>${prev ? '<button type="button" class="btn sm" id="slCopy">지난달 명세 복사</button>' : ''}</div></div>
@@ -1685,14 +1745,16 @@ function openPaySetup(){
       <label class="ck"><input type="checkbox" data-pe="${e.id}" data-f="link" ${e.link ? 'checked' : ''}> 실수령액을 가계부 수입에 자동 기록</label>
       ${es.length > 1 ? `<button type="button" class="btn sm danger" data-pedel="${e.id}">이 사람 삭제</button>` : ''}</div>`).join('')}
     <button type="button" class="btn sm" id="peAdd">+ 사람 추가</button>
-    <div class="bk-g">지급 항목 <small class="muted">(비과세·상여·연차는 연말정산·퇴직금 계산에 쓰여요)</small></div>
+    <div class="bk-g">지급 항목 <small class="muted">(↑↓로 순서 변경 · 비과세·상여·연차는 연말정산·퇴직금 계산에 쓰여요)</small></div>
     ${S.pay.earn.map((it,i) => `<div class="cat-row wrap"><input value="${esc(it.name)}" maxlength="20" data-pi="${i}" aria-label="항목 이름">
       <label class="mini"><input type="checkbox" data-pif="${i}" data-k="nontax" ${it.nontax?'checked':''}>비과세</label><label class="mini"><input type="checkbox" data-pif="${i}" data-k="bonus" ${it.bonus?'checked':''}>상여</label><label class="mini"><input type="checkbox" data-pif="${i}" data-k="leave" ${it.leave?'checked':''}>연차</label>
+      <button type="button" class="icon sm" data-pimv="${i}" data-dir="-1" aria-label="위로" ${i ? '' : 'disabled'}>↑</button><button type="button" class="icon sm" data-pimv="${i}" data-dir="1" aria-label="아래로" ${i < S.pay.earn.length - 1 ? '' : 'disabled'}>↓</button>
       <button type="button" class="icon sm" data-pidel="${i}" aria-label="삭제">×</button></div>`).join('')}
     <div class="inline"><input type="text" id="piNew" maxlength="20" placeholder="새 지급 항목 (예: 회사지원연금)"><button type="button" class="btn" id="piAdd">추가</button></div>
     <div class="bk-g">공제 항목</div>
     ${S.pay.ded.map((it,i) => `<div class="cat-row"><input value="${esc(it.name)}" maxlength="20" data-pd="${i}" aria-label="항목 이름">
       <select data-pdr="${i}">${PAY_ROLES.map(([r,l]) => `<option value="${r}" ${it.role===r?'selected':''}>${l}</option>`).join('')}</select>
+      <button type="button" class="icon sm" data-pdmv="${i}" data-dir="-1" aria-label="위로" ${i ? '' : 'disabled'}>↑</button><button type="button" class="icon sm" data-pdmv="${i}" data-dir="1" aria-label="아래로" ${i < S.pay.ded.length - 1 ? '' : 'disabled'}>↓</button>
       <button type="button" class="icon sm" data-pddel="${i}" aria-label="삭제">×</button></div>`).join('')}
     <div class="inline"><input type="text" id="pdNew" maxlength="20" placeholder="새 공제 항목 (예: 조식비)"><button type="button" class="btn" id="pdAdd">추가</button></div>
     <div class="actions"><button type="submit" class="btn primary">저장</button></div>`, 'paysetup');
@@ -1715,7 +1777,7 @@ function openYet(){
   ctx = {key: e.id + '-' + Y};
   showSheet(`${sheetHead(`${esc(e.name)} · ${Y}년 귀속 공제 항목`)}
     <p class="note">1년 예상치를 넣어 보세요. 급여에서 총급여·4대보험·기납부세액은 자동으로 가져와요.</p>
-    <div class="two">${YET_F.map(([k,l,t]) => `<label class="field"><span>${l}</span><input inputmode="numeric" ${t==='money'?'data-money':''} data-yet="${k}" value="${x[k] != null && x[k] !== '' ? (t==='money' ? won(x[k]) : x[k]) : ''}" placeholder="${k==='credit' || k==='insurance' ? '자동' : '0'}"></label>`).join('')}</div>
+    <div class="two">${YET_F.map(([k,l,t]) => `<label class="field"><span>${l}</span><input inputmode="${t==='money'?'tel':'numeric'}" autocomplete="off" ${t==='money'?'data-money':''} data-yet="${k}" value="${x[k] != null && x[k] !== '' ? (t==='money' ? won(x[k]) : x[k]) : ''}" placeholder="${k==='credit' || k==='insurance' ? '자동' : '0'}"></label>`).join('')}</div>
     <label class="ck"><input type="checkbox" id="yMar" ${x.marriage ? 'checked' : ''}> 결혼세액공제 (해당 연도 혼인신고 · 50만 원)</label>
     <div class="actions"><button type="submit" class="btn primary">계산하기</button></div>`, 'yet');
 }
@@ -1728,9 +1790,9 @@ function openSev(){
   showSheet(`${sheetHead(`${esc(e.name)} 퇴직금 설정`)}
     <label class="field"><span>입사일</span><input type="date" id="svHire" value="${e.hire||''}"></label>
     <p class="note">아래는 비워 두면 급여 명세에서 자동으로 계산해요.</p>
-    <label class="field"><span>최근 3개월 임금 총액 (상여·연차수당 제외)</span><input inputmode="numeric" data-money id="svW" value="${e.sevWage3 ? won(e.sevWage3) : ''}" placeholder="자동"></label>
-    <div class="two"><label class="field"><span>최근 1년 상여금 합계</span><input inputmode="numeric" data-money id="svB" value="${e.sevBonus != null && e.sevBonus !== '' ? won(e.sevBonus) : ''}" placeholder="자동"></label>
-      <label class="field"><span>최근 1년 연차수당 합계</span><input inputmode="numeric" data-money id="svL" value="${e.sevLeave != null && e.sevLeave !== '' ? won(e.sevLeave) : ''}" placeholder="자동"></label></div>
+    <label class="field"><span>최근 3개월 임금 총액 (상여·연차수당 제외)</span><input inputmode="tel" autocomplete="off" data-money id="svW" value="${e.sevWage3 ? won(e.sevWage3) : ''}" placeholder="자동"></label>
+    <div class="two"><label class="field"><span>최근 1년 상여금 합계</span><input inputmode="tel" autocomplete="off" data-money id="svB" value="${e.sevBonus != null && e.sevBonus !== '' ? won(e.sevBonus) : ''}" placeholder="자동"></label>
+      <label class="field"><span>최근 1년 연차수당 합계</span><input inputmode="tel" autocomplete="off" data-money id="svL" value="${e.sevLeave != null && e.sevLeave !== '' ? won(e.sevLeave) : ''}" placeholder="자동"></label></div>
     <div class="actions"><button type="submit" class="btn primary">저장</button></div>`, 'sev');
 }
 function submitSev(){
@@ -1758,7 +1820,7 @@ function openTx(t){
       <div class="seg"><button type="button" data-ft="expense">지출</button><button type="button" data-ft="income">수입</button><button type="button" data-ft="saving">저축</button></div>
       <div class="seg" id="fkind"><button type="button" data-fk="fixed">고정</button><button type="button" data-fk="variable">변동</button></div>
     </div>
-    <label class="amount-field"><input id="fAmt" inputmode="numeric" placeholder="0" value="${t?won(t.amount):''}" aria-label="금액"><span>원</span></label>
+    <label class="amount-field"><input id="fAmt" inputmode="tel" autocomplete="off" placeholder="0" value="${t?won(t.amount):''}" aria-label="금액"><span>원</span></label>
     <label class="field"><span>날짜</span><input type="date" id="fDate" value="${t?t.date:defaultDate()}" required></label>
     <div class="field"><span id="fCatLabel">카테고리</span><div class="chips" id="fCats"></div></div>
     <div class="field"><span>결제수단</span><div class="chips" id="fMethods"></div></div>
@@ -1850,7 +1912,7 @@ function fieldHtml(k, label, type, opt, val){
   if(type === 'use') return `<label class="field"><span>${label}</span><select id="af_${k}" style="width:100%"><option value="">연결 안 함</option>${S.assets.use.map(u=>`<option value="${u.id}" ${val===u.id?'selected':''}>${esc(u.name)}</option>`).join('')}</select></label>`;
   const empty = val == null || val === '' || ((type==='money'||type==='decimal'||type==='int') && !val);
   const v = empty ? '' : type==='money' ? won(val) : val;
-  const attrs = type==='money' ? 'inputmode="numeric" data-money' : type==='int' ? 'inputmode="numeric" maxlength="2"' : type==='decimal' ? 'inputmode="decimal"' : type==='date' ? 'type="date"' : 'type="text" maxlength="40"';
+  const attrs = type==='money' ? 'inputmode="tel" autocomplete="off" data-money' : type==='int' ? 'inputmode="numeric" maxlength="2"' : type==='decimal' ? 'inputmode="decimal"' : type==='date' ? 'type="date"' : 'type="text" maxlength="40"';
   return `<label class="field"><span>${label}</span><input id="af_${k}" ${attrs} value="${esc(v)}" ${opt&&type==='text'?`placeholder="${esc(opt)}"`:''}></label>`;
 }
 function openAsset(kind, item){
@@ -1894,8 +1956,8 @@ function openRepay(item, rid){
     <p class="note">현재 남은 원금 <b>${won(item.loan)}원</b>. 원금 상환액만큼 줄어들어요.</p>
     ${item.loanMonthly?`<p class="note">매달 원금 목표 ${won(item.loanMonthly)}원 · 이번 달 상환 ${won(paidThis)}원</p>`:''}
     <label class="field"><span>상환일</span><input type="date" id="rDate" value="${rid ? recDue(S.recurring.find(r=>r.id===rid)||{day:item.repayDay||25}) : dstr(new Date())}"></label>
-    <label class="field"><span>원금 상환액</span><input id="rPrin" inputmode="numeric" data-money placeholder="0" value="${sugP?won(sugP):''}"></label>
-    <label class="field"><span>이자 ${item.loanRate?`(예상 약 ${won(estInterest(item))}원)`:''}</span><input id="rInt" inputmode="numeric" data-money placeholder="0" value="${item.loanRate&&sugP?won(estInterest(item)):''}"></label>
+    <label class="field"><span>원금 상환액</span><input id="rPrin" inputmode="tel" autocomplete="off" data-money placeholder="0" value="${sugP?won(sugP):''}"></label>
+    <label class="field"><span>이자 ${item.loanRate?`(예상 약 ${won(estInterest(item))}원)`:''}</span><input id="rInt" inputmode="tel" autocomplete="off" data-money placeholder="0" value="${item.loanRate&&sugP?won(estInterest(item)):''}"></label>
     <label class="ck" ${rid?'hidden':''}><input type="checkbox" id="rTx" checked> 가계부에 '부채 상환' 고정지출로도 기록</label>
     <div class="actions"><button type="submit" class="btn primary">상환 기록</button></div>`, 'repay');
 }
@@ -1926,7 +1988,7 @@ function submitRepay(){
 function openPlan(){
   const P = S.debtPlan, debts = S.assets.debts.filter(d=>d.loan>0);
   showSheet(`${sheetHead('대출 통합 상환 계획')}
-    <label class="field"><span>매달 대출 상환에 쓸 총액 (원금+이자)</span><input id="plMon" inputmode="numeric" data-money value="${P.monthly?won(P.monthly):''}" placeholder="예: 2,000,000"></label>
+    <label class="field"><span>매달 대출 상환에 쓸 총액 (원금+이자)</span><input id="plMon" inputmode="tel" autocomplete="off" data-money value="${P.monthly?won(P.monthly):''}" placeholder="예: 2,000,000"></label>
     <label class="field"><span>상환일 (매월 며칠)</span><input id="plDay" inputmode="numeric" maxlength="2" value="${P.day||25}"></label>
     <div class="field"><span>갚는 순서</span><div class="chips">${[['rate','이율 높은 대출부터 (이자 절약)'],['small','잔액 적은 대출부터 (빨리 하나씩)'],['list','목록 순서대로']].map(([k,l])=>`<label class="chip"><input type="radio" name="plOrd" value="${k}" ${(P.order||'rate')===k?'checked':''}><span>${l}</span></label>`).join('')}</div></div>
     <div class="field"><span>포함할 대출 (은행이 정한 대로 갚는 주택대출 등은 빼세요)</span><div class="ck-list">${debts.map(d=>`<label><input type="checkbox" name="plIds" value="${d.id}" ${P.ids.includes(d.id)?'checked':''}> ${esc(d.name)} <small class="muted">${short(d.loan)} · ${d.loanRate||0}%</small></label>`).join('')}</div></div>
@@ -1949,7 +2011,7 @@ function openPlanPay(r){
     <p class="note">계획대로 채워 두었어요. 실제 금액이 다르면 고쳐 주세요.</p>
     <label class="field"><span>상환일</span><input type="date" id="ppDate" value="${recDue(r)}"></label>
     ${ds.map(d=>`<div class="field"><span>${esc(d.name)} <small class="muted">(남은 원금 ${won(d.loan)})</small></span>
-      <div class="two"><input inputmode="numeric" data-money data-ppp="${d.id}" value="${won(row.items[d.id].p)}" aria-label="원금"><input inputmode="numeric" data-money data-ppi="${d.id}" value="${won(row.items[d.id].it)}" aria-label="이자"></div>
+      <div class="two"><input inputmode="tel" autocomplete="off" data-money data-ppp="${d.id}" value="${won(row.items[d.id].p)}" aria-label="원금"><input inputmode="tel" autocomplete="off" data-money data-ppi="${d.id}" value="${won(row.items[d.id].it)}" aria-label="이자"></div>
       <small class="muted">왼쪽 원금 · 오른쪽 이자</small></div>`).join('')}
     <div class="actions"><button type="submit" class="btn primary">상환 완료</button></div>`, 'planpay');
 }
@@ -1970,7 +2032,7 @@ function openRec(r){
   const ms = allMethods();
   showSheet(`${sheetHead(r?'고정 항목 수정':'고정 항목 추가')}
     <label class="field"><span>이름</span><input type="text" id="rcName" maxlength="40" value="${esc(r?r.name:'')}" placeholder="예: 아파트 관리비"></label>
-    <label class="amount-field"><input id="rcAmt" inputmode="numeric" data-money placeholder="0" value="${r?won(r.amount):''}" aria-label="금액"><span>원</span></label>
+    <label class="amount-field"><input id="rcAmt" inputmode="tel" autocomplete="off" data-money placeholder="0" value="${r?won(r.amount):''}" aria-label="금액"><span>원</span></label>
     <label class="field"><span>매월 며칠 (결제일·이체일)</span><input id="rcDay" inputmode="numeric" maxlength="2" value="${r?r.day:''}" placeholder="1~31"></label>
     <label class="ck"><input type="checkbox" id="rcVary" ${r&&r.vary?'checked':''}> 금액이 매달 달라요 (관리비·전기·가스 등)</label>
     <label class="field"><span>끝나는 달 (선택 · 할부·약정 만기)</span><input type="month" id="rcEnd" value="${r&&r.end?r.end:''}"></label>
@@ -1997,7 +2059,7 @@ function openFxPay(r){
   const last = S.tx.filter(t=>t.rid===r.id).sort((a,b)=>b.date.localeCompare(a.date))[0];
   showSheet(`${sheetHead(`${esc(r.name)} · ${M}월 완료`)}
     <p class="note">이번 달 실제 금액을 입력하세요.${last?` (지난번 ${won(last.amount)}원)`:''}</p>
-    <label class="amount-field"><input id="fxAmt" inputmode="numeric" data-money value="${won(last?last.amount:r.amount)}" aria-label="금액"><span>원</span></label>
+    <label class="amount-field"><input id="fxAmt" inputmode="tel" autocomplete="off" data-money value="${won(last?last.amount:r.amount)}" aria-label="금액"><span>원</span></label>
     <label class="field"><span>날짜</span><input type="date" id="fxDate" value="${recDue(r)}"></label>
     <div class="actions"><button type="submit" class="btn primary">완료</button></div>`, 'fxpay');
   setTimeout(()=>{ const i=$('#fxAmt'); if(i){ i.focus(); i.select(); } }, 50);
@@ -2014,7 +2076,7 @@ function openFund(f){
   ctx = {id: f ? f.id : null};
   showSheet(`${sheetHead(f?'적립 통장 설정':'적립 통장 추가')}
     <label class="field"><span>이름</span><input type="text" id="fdName" maxlength="30" value="${esc(f?f.name:'')}" placeholder="예: 자동차 보험·세금·수리"></label>
-    <label class="field"><span>매달 적립액</span><input id="fdMon" inputmode="numeric" data-money value="${f&&f.monthly?won(f.monthly):''}"></label>
+    <label class="field"><span>매달 적립액</span><input id="fdMon" inputmode="tel" autocomplete="off" data-money value="${f&&f.monthly?won(f.monthly):''}"></label>
     <div class="two"><label class="field"><span>시작 달</span><input type="month" id="fdStart" value="${f&&f.start?f.start:ym()}"></label>
       <label class="field"><span>시작 잔액 (이월)</span><input id="fdBase" inputmode="numeric" value="${f&&f.base?won(f.base):''}" placeholder="0 (마이너스는 -)"></label></div>
     <div class="field"><span>연결 카테고리 (이 카테고리로 지출하면 잔액에서 빠져요)</span><div class="ck-list">${catCheckList('fdCats', f ? f.cats : [])}</div></div>
@@ -2056,7 +2118,7 @@ function submitPool(){
 function openPoolEnt(e, pool, type){
   ctx = {id: e ? e.id : null, pool: e ? e.pool : pool, type: e ? e.type : type};
   showSheet(`${sheetHead(`${esc((S.pools.find(p=>p.id===ctx.pool)||{}).name||'')} ${ctx.type==='in'?'입금':'출금'}`)}
-    <label class="amount-field"><input id="peAmt" inputmode="numeric" data-money placeholder="0" value="${e?won(e.amount):''}" aria-label="금액"><span>원</span></label>
+    <label class="amount-field"><input id="peAmt" inputmode="tel" autocomplete="off" data-money placeholder="0" value="${e?won(e.amount):''}" aria-label="금액"><span>원</span></label>
     <label class="field"><span>날짜</span><input type="date" id="peDate" value="${e?e.date:defaultDate()}"></label>
     <label class="field"><span>메모</span><input type="text" id="peMemo" maxlength="60" value="${esc(e?e.memo:'')}" placeholder="${ctx.type==='in'?'예: 은행 이자, 회비':'예: 명절 선물'}"></label>
     <div class="actions">${e?'<button type="button" class="btn danger" id="peDel">삭제</button>':''}<button type="submit" class="btn primary">저장</button></div>`, 'poolent');
@@ -2127,16 +2189,18 @@ function sendSync(){
   }
 }
 async function exportBackup(){
-  const pw = $('#bkPw').value;
+  const typed = ($('#bkPw') || {}).value || '';
+  const pw = typed || (appLock ? appLock.pw : '');
   const payload = {...S, savedAt: Date.now()};
   let out;
   if(pw){
     if(!(window.crypto && crypto.subtle)){ toast('이 환경에선 암호화를 쓸 수 없어요 (https 주소에서 열어주세요)'); return; }
     out = await encryptPayload(pw, payload);
   } else out = {format:'household-ledger-backup', v:1, enc:false, data:payload};
-  download(`Purse백업_${dstr(new Date())}${pw?'_암호화':''}.json`, JSON.stringify(out), 'application/json');
+  const n = new Date();
+  download(`Purse백업_${dstr(n)}_${pad(n.getHours())}${pad(n.getMinutes())}${pw?'_암호화':''}.json`, JSON.stringify(out), 'application/json');
   S.lastBackup = Date.now(); save(); render();
-  toast(pw ? '암호화된 백업 파일을 저장했어요' : '백업 파일을 저장했어요');
+  toast(pw ? (typed ? '암호화된 백업 파일을 저장했어요' : '앱 비밀번호로 암호화된 백업 파일을 저장했어요') : '백업 파일을 저장했어요');
 }
 
 /* 병합: 같은 항목은 더 최근 수정본, 지운 항목은 지운 대로 */
@@ -2242,17 +2306,14 @@ async function importBackup(file){
   if(!obj || obj.format!=='household-ledger-backup'){ toast('Purse 백업 파일이 아니에요'); return; }
   let data;
   if(obj.enc){
-    const pws = [...new Set([($('#bkPw')||{}).value, getSyncPw()].filter(Boolean))];
-    if(!pws.length){ toast('암호화된 파일이에요. 동기화 비밀번호를 먼저 설정하세요'); return; }
     if(!(window.crypto && crypto.subtle)){ toast('이 환경에선 복호화를 쓸 수 없어요 (https 주소에서 열어주세요)'); return; }
-    for(const pw of pws){
-      try{
-        const key = await deriveKey(pw, unb64(obj.salt));
-        const pt = await crypto.subtle.decrypt({name:'AES-GCM', iv:unb64(obj.iv)}, key, unb64(obj.data));
-        data = JSON.parse(new TextDecoder().decode(pt)); break;
-      }catch(e){}
+    const attempt = async pw => { try{ const key = await deriveKey(pw, unb64(obj.salt)); const pt = await crypto.subtle.decrypt({name:'AES-GCM', iv:unb64(obj.iv)}, key, unb64(obj.data)); return JSON.parse(new TextDecoder().decode(pt)); }catch(e){ return null; } };
+    for(const pw of [...new Set([($('#bkPw')||{}).value, appLock && appLock.pw, getSyncPw()].filter(Boolean))]){ data = await attempt(pw); if(data) break; }
+    for(let i = 0; !data && i < 3; i++){
+      const pw = askPw(i ? '비밀번호가 맞지 않아요. 다시 입력하세요' : '백업 파일 비밀번호를 입력하세요 (만들 때 쓴 앱·백업 비밀번호)');
+      if(pw == null) return; data = await attempt(pw);
     }
-    if(!data){ toast('비밀번호가 맞지 않아요. 두 기기의 동기화 비밀번호가 같은지 확인하세요'); return; }
+    if(!data){ toast('비밀번호가 맞지 않아요'); return; }
   } else data = obj.data;
   const savedAt = data && data.savedAt;
   const r = merge(data || {}); S.lastReceived = Date.now(); save(); render();
@@ -2268,6 +2329,40 @@ function exportCSV(all){
       t.type==='income'?t.amount:-t.amount, qt(t.method), t.type==='expense'&&isCard(t.method)?(t.paid?'완료':'미납'):'', qt(t.memo)].join(',')));
   download(`Purse_${all?'전체':ym()}.csv`, '﻿' + rows.join('\r\n'), 'text/csv;charset=utf-8');
 }
+
+/* ================= 앱 잠금 ================= */
+const cryptoOk = () => !!(window.crypto && crypto.subtle);
+function showLock(msg){ $('#lockScreen').hidden = false; $('#lockMsg').textContent = msg || ''; $('#lockPw').value = ''; setTimeout(() => $('#lockPw').focus(), 50); }
+async function tryUnlock(pw){
+  if(!lockedBlob) return;
+  if(!cryptoOk()){ $('#lockMsg').textContent = '이 브라우저에선 열 수 없어요 (크롬·엣지·사파리 최신 버전 사용)'; return; }
+  $('#lockMsg').textContent = '여는 중…';
+  try{
+    const salt = unb64(lockedBlob.salt), key = await deriveKey(pw, salt);
+    const data = await openBlob(lockedBlob, key);
+    S = migrate(data); appLock = {pw, salt, key}; lockedBlob = null;
+    $('#lockScreen').hidden = true; $('#lockMsg').textContent = ''; render();
+  }catch(e){ $('#lockMsg').textContent = '비밀번호가 맞지 않아요'; $('#lockPw').select(); }
+}
+async function setAppLock(pw){
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  appLock = {pw, salt, key: await deriveKey(pw, salt)}; save(); await saveChain;
+}
+async function lockApp(){
+  if(!appLock) return;
+  save(); await saveChain;
+  let d; try{ d = JSON.parse(localStorage.getItem(KEY)); }catch(e){}
+  if(!(d && d.lock === 1)) return;
+  lockedBlob = d; appLock = null; keyCache = {pw:null, salt:null, key:null};
+  if(!$('#sheet').hidden) closeSheet(); lockSecret(); S = fresh(); view = 'stats'; render(); showLock();
+}
+// 자동 잠금: 앱을 나갔다 돌아오면 (기본 즉시) 다시 비밀번호. 기기별 설정
+const LOCKT_KEY = 'household-ledger-locktime';
+const lockAfter = () => { const v = +localStorage.getItem(LOCKT_KEY); return isFinite(v) && v >= 0 ? v : 0; };
+let hiddenAt = 0;
+document.addEventListener('visibilitychange', () => { if(document.hidden) hiddenAt = Date.now(); else if(appLock && hiddenAt && Date.now() - hiddenAt >= lockAfter() * 60e3) lockApp(); });
+window.addEventListener('pageshow', e => { if(e.persisted && appLock) lockApp(); });
+const askPw = msg => { const v = prompt(msg); return v == null ? null : v; };
 
 /* ================= 엑셀(.xlsx) 불러오기 — 기기 안에서만 처리 ================= */
 async function readXlsx(file){
@@ -2665,7 +2760,7 @@ function openSec(e, pocket, type){
   const pk = e ? e.pocket : (pocket || secSel || (secretData.pockets[0]||{}).id);
   showSheet(`${sheetHead(e ? '기록 수정' : '숨김 지갑 기록')}
     <div class="seg"><button type="button" data-sty="in">넣기 (들어옴)</button><button type="button" data-sty="out">쓰기 (나감)</button></div>
-    <label class="amount-field"><input id="sAmt" inputmode="numeric" data-money placeholder="0" value="${e?won(e.amount):''}" aria-label="금액"><span>원</span></label>
+    <label class="amount-field"><input id="sAmt" inputmode="tel" autocomplete="off" data-money placeholder="0" value="${e?won(e.amount):''}" aria-label="금액"><span>원</span></label>
     <div class="field"><span>주머니</span><div class="chips">${secretData.pockets.map(p=>`<label class="chip"><input type="radio" name="sPocket" value="${p.id}" ${p.id===pk?'checked':''}><span>${esc(p.name)}</span></label>`).join('')}</div></div>
     <label class="field"><span>날짜</span><input type="date" id="sDate" value="${e ? e.date : defaultDate()}"></label>
     <label class="field"><span>메모</span><input type="text" id="sMemo" maxlength="80" value="${esc(e ? e.memo : '')}" placeholder="예: 11월 용돈, 비상금 적립"></label>
@@ -2687,7 +2782,7 @@ function openPocket(p){
   ctx = {id: p ? p.id : null};
   showSheet(`${sheetHead(p ? '주머니 설정' : '주머니 추가')}
     <label class="field"><span>이름</span><input type="text" id="pName" maxlength="20" value="${esc(p ? p.name : '')}" placeholder="예: 여행 자금"></label>
-    <label class="field"><span>목표 금액 (선택)</span><input id="pGoal" inputmode="numeric" data-money value="${p && p.goal ? won(p.goal) : ''}" placeholder="예: 비상금 500만 원"></label>
+    <label class="field"><span>목표 금액 (선택)</span><input id="pGoal" inputmode="tel" autocomplete="off" data-money value="${p && p.goal ? won(p.goal) : ''}" placeholder="예: 비상금 500만 원"></label>
     <div class="actions">${p ? '<button type="button" class="btn danger" id="pDel">삭제</button>' : ''}<button type="submit" class="btn primary">저장</button></div>`, 'pocket');
 }
 async function submitPocket(){
@@ -2759,6 +2854,13 @@ document.addEventListener('click', e => {
     S.pay.slips = S.pay.slips.filter(x => x.earner !== id); S.pay.earners = S.pay.earners.filter(x => x.id !== id); payWho = null; openPaySetup(); return; }
   if(el('#piAdd')){ const v = $('#piNew').value.trim(); if(!v) return; applyPaySetup(); if(!S.pay.earn.some(x => x.name === v)) S.pay.earn.push({name: v}); openPaySetup(); return; }
   if(el('#pdAdd')){ const v = $('#pdNew').value.trim(); if(!v) return; applyPaySetup(); if(!S.pay.ded.some(x => x.name === v)) S.pay.ded.push({name: v, role: 'other'}); openPaySetup(); return; }
+  if((b = el('[data-pimv]')) || (b = el('[data-pdmv]'))){
+    const list = b.dataset.pimv !== undefined ? S.pay.earn : S.pay.ded, i = +(b.dataset.pimv ?? b.dataset.pdmv), j = i + +b.dataset.dir;
+    if(j < 0 || j >= list.length) return; applyPaySetup(); [list[i], list[j]] = [list[j], list[i]];
+    const sp = document.querySelector('.sheet-panel'), top = sp ? sp.scrollTop : 0; openPaySetup();
+    const sp2 = document.querySelector('.sheet-panel'); if(sp2) sp2.scrollTop = top;
+    const nb = document.querySelector(`[data-${b.dataset.pimv !== undefined ? 'pimv' : 'pdmv'}="${j}"][data-dir="${b.dataset.dir}"]`); (nb && !nb.disabled ? nb : document.querySelector(`[data-${b.dataset.pimv !== undefined ? 'pimv' : 'pdmv'}="${j}"]`))?.focus({preventScroll: true});
+    return; }
   if((b = el('[data-pidel]'))){ applyPaySetup(); S.pay.earn.splice(+b.dataset.pidel, 1); openPaySetup(); return; }
   if((b = el('[data-pddel]'))){ applyPaySetup(); S.pay.ded.splice(+b.dataset.pddel, 1); openPaySetup(); return; }
   if(el('#fillLast')){ fillBudgets(1); return; }
@@ -2923,6 +3025,16 @@ document.addEventListener('click', e => {
   }
   if(el('#syncSend')){ sendSync(); return; }
   if(el('#syncPwReset')){ if(confirm('동기화 비밀번호를 다시 설정할까요? 다른 기기도 같은 비밀번호로 바꿔야 해요.')){ setSyncPw(''); keyCache = {pw:null}; renderSettings(); } return; }
+  if(el('#quickBackup')){ exportBackup().catch(()=>toast('백업 중 오류가 났어요')); return; }
+  if(el('#lockForgot')){ if(!confirm('비밀번호 없이는 이 기기의 데이터를 열 수 없어요. 이 기기의 Purse 데이터를 모두 지우고 새로 시작할까요? (백업 파일이 있으면 나중에 불러올 수 있어요)')) return;
+    if(!confirm('정말 지울까요? 되돌릴 수 없어요.')) return; localStorage.removeItem(KEY); lockedBlob = null; appLock = null; S = fresh(); save(); $('#lockScreen').hidden = true; render(); toast('초기화했어요. 설정에서 백업 파일을 불러오세요'); return; }
+  if(el('#lockNow')){ lockApp(); return; }
+  if(el('#lockChange')){ const cur = askPw('지금 비밀번호'); if(cur == null) return; if(cur !== appLock.pw){ toast('비밀번호가 맞지 않아요'); return; }
+    const a = askPw('새 비밀번호 (4자 이상)'); if(a == null) return; if(a.length < 4){ toast('4자 이상으로 정해 주세요'); return; }
+    if(askPw('새 비밀번호 한 번 더') !== a){ toast('두 비밀번호가 달라요'); return; }
+    setAppLock(a).then(() => { renderSettings(); toast('바꿨어요. 예전 백업 파일은 예전 비밀번호로 열려요'); }); return; }
+  if(el('#lockOff')){ const cur = askPw('잠금을 끄려면 비밀번호를 입력하세요'); if(cur == null) return; if(cur !== appLock.pw){ toast('비밀번호가 맞지 않아요'); return; }
+    appLock = null; save(); renderSettings(); toast('잠금을 껐어요'); return; }
   if(el('#exportBtn')){ exportBackup().catch(()=>toast('백업 중 오류가 났어요')); return; }
   if(el('#csvMonth')){ exportCSV(false); return; }
   if(el('#csvAll')){ exportCSV(true); return; }
@@ -2934,6 +3046,14 @@ document.addEventListener('click', e => {
   }
 });
 document.addEventListener('submit', e => {
+  if(e.target.id === 'lockForm'){ e.preventDefault(); const v = $('#lockPw').value; if(v) tryUnlock(v); return; }
+  if(e.target.id === 'appLockForm'){
+    e.preventDefault(); const a = $('#alPw').value, b2 = $('#alPw2').value;
+    if(!cryptoOk()){ toast('이 브라우저에선 암호화를 쓸 수 없어요'); return; }
+    if(a.length < 4){ toast('4자 이상으로 정해 주세요'); return; }
+    if(a !== b2){ toast('두 비밀번호가 달라요'); return; }
+    setAppLock(a).then(() => { renderSettings(); toast('잠금을 설정했어요. 백업 파일도 만들어 두세요'); }); return;
+  }
   if(e.target.id === 'syncPwForm'){
     e.preventDefault(); const v = $('#syncPw').value;
     if(v.length < 6){ toast('6자 이상으로 정해 주세요'); return; }
@@ -2968,12 +3088,25 @@ document.addEventListener('input', e => {
   const t = e.target;
   if(t.id === 'q'){ q = t.value; renderListBody(); return; }
   if(t.id === 'fAmt' || t.dataset.budget !== undefined || t.dataset.money !== undefined){
-    const d = String(t.value).replace(/\D/g,'').slice(0,13);
-    t.value = d ? Number(d).toLocaleString('ko-KR') : '';
+    if(/\d.*[+\-*/×÷xX(]|^[(]/.test(t.value)){ t.value = t.value.replace(/[^\d,+\-*/×÷xX(). ]/g,'').slice(0,60); calcHint(t); }
+    else { const d = String(t.value).replace(/\D/g,'').slice(0,13); t.value = d ? Number(d).toLocaleString('ko-KR') : ''; calcHint(null); }
     if(t.dataset.bk !== undefined) updBkTotal();
     if(t.dataset.slip !== undefined) updSlipNet();
   }
 });
+function calcHint(t){
+  let h = $('#calcHint'); if(!h){ h = document.createElement('div'); h.id = 'calcHint'; h.className = 'calc-hint'; document.body.appendChild(h); }
+  if(!t){ h.hidden = true; return; }
+  const r = t.getBoundingClientRect(); h.textContent = `= ${won(Math.abs(calcExpr(t.value)))}원`; h.hidden = false;
+  h.style.top = Math.max(4, r.top - 30) + 'px'; h.style.left = Math.max(8, Math.min(innerWidth - h.offsetWidth - 8, r.right - h.offsetWidth)) + 'px';
+}
+const isMoneyEl = t => t && t.tagName === 'INPUT' && (t.id === 'fAmt' || t.dataset.budget !== undefined || t.dataset.money !== undefined);
+function settleExpr(t){ if(isMoneyEl(t) && isExpr(t.value)){ const v = digits(t.value); t.value = v ? won(v) : ''; t.dispatchEvent(new Event('input', {bubbles: true})); } }
+// 계산식은 값이 확정될 때(포커스 이동·저장) 결과 금액으로 바뀜
+document.addEventListener('change', e => { if(e.target.id === 'lockAfterSel'){ localStorage.setItem(LOCKT_KEY, e.target.value); toast('저장했어요'); return; } settleExpr(e.target); }, true);
+document.addEventListener('focusout', e => { if(isMoneyEl(e.target)){ settleExpr(e.target); calcHint(null); } });
+document.addEventListener('submit', e => { for(const i of e.target.querySelectorAll('input')) settleExpr(i); }, true);
+document.addEventListener('scroll', () => { const h = $('#calcHint'); if(h && !h.hidden) calcHint(isMoneyEl(document.activeElement) && isExpr(document.activeElement.value) ? document.activeElement : null); }, true);
 document.addEventListener('change', e => {
   const t = e.target;
   if(t.dataset.budget !== undefined){
@@ -3004,10 +3137,16 @@ document.addEventListener('keydown', e => {
   if(!typing && $('#sheet').hidden && (e.key==='n' || e.key==='+') && !e.metaKey && !e.ctrlKey && !['assets','secret','settings'].includes(view)){ e.preventDefault(); openTx(); }
 });
 document.addEventListener('toggle', e => { const d = e.target; if(d.dataset && d.dataset.grp){ d.open ? openGroups.add(d.dataset.grp) : openGroups.delete(d.dataset.grp); } }, true);
-window.addEventListener('storage', e => { if(e.key===KEY){ S = load(); render(); } });
+window.addEventListener('storage', async e => {
+  if(e.key !== KEY || lockedBlob) return;
+  let d; try{ d = JSON.parse(e.newValue); }catch(_){ return; }
+  if(d && d.lock === 1){ if(!appLock || d.salt !== b64(appLock.salt)) return; try{ S = migrate(await openBlob(d, appLock.key)); render(); }catch(_){} return; }
+  if(appLock) return; S = load(); render();
+});
 
-save(); // 이전 버전 데이터를 새 구조로 저장
+save(); // 이전 버전 데이터를 새 구조로 저장 (잠금 상태면 건너뜀)
 render();
+if(lockedBlob) showLock();
 if('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(()=>{});
 
 </script>
