@@ -279,6 +279,19 @@ header.top .sync-btn{order:0}
 label.mini{display:inline-flex;align-items:center;gap:3px;font-size:12px;color:var(--muted);white-space:nowrap}
 label.mini input{width:16px;height:16px;accent-color:var(--accent)}
 .cmp td small{color:var(--muted)}
+.whoseg button{padding:7px 12px}
+.who-bar{align-items:center;margin:0 0 10px}
+.who-bar .muted{font-size:12px}
+.own{font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:999px;background:#e8eefc;color:#2f55a8;margin-left:6px;vertical-align:1px}
+@media (prefers-color-scheme:dark){.own{background:#22304d;color:#9db8f0}}
+.cname{border:0;background:none;padding:0;font:inherit;color:var(--ink);cursor:pointer;text-align:left}
+.cname i{font-style:normal;color:var(--muted);font-size:12px;margin-left:4px}
+.cname-edit{font:inherit;font-size:15px;padding:4px 8px;border:1px solid var(--accent);border-radius:8px;width:150px;background:var(--card);color:var(--ink)}
+.ownsel{padding:5px 6px!important;font-size:13px!important;max-width:92px}
+.bk-row.bk4{grid-template-columns:minmax(0,1fr) auto auto 110px}
+.bk-row .bkname{border:1px solid transparent;background:transparent;padding:6px;border-radius:8px;font-size:15px;text-align:left;min-width:0}
+.bk-row .bkname:focus{border-color:var(--accent);background:var(--card)}
+@media (max-width:520px){.bk-row.bk4{grid-template-columns:minmax(0,1fr) auto 100px}.bk-row.bk4 small{display:none}}
 </style>
 </head>
 <body>
@@ -333,7 +346,9 @@ const fresh = () => ({
   assets: {cash:[], savings:[], stocks:[], use:[], debts:[]},
   funds: [], pools: [], poolTx: [],
   debtPlan: {monthly:0, ids:[], order:'rate', day:25},
-  pay: payDefault()
+  pay: payDefault(),
+  members: [{id:'common', name:'공동'}, {id:'u1', name:'사용자1'}, {id:'u2', name:'사용자2'}, {id:'u3', name:'사용자3'}],
+  catOwner: {}
 });
 const ASSET_KINDS = ['cash','savings','stocks','use','debts'];
 function rebuildCats(s){
@@ -369,6 +384,8 @@ function migrate(d){
   if(!Array.isArray(s.recurring)) s.recurring = [];
   for(const k of ['funds','pools','poolTx']) if(!Array.isArray(s[k])) s[k] = [];
   if(!s.pay || typeof s.pay !== 'object') s.pay = payDefault();
+  if(!Array.isArray(s.members) || s.members.length !== 4) s.members = f.members;
+  if(!s.catOwner || typeof s.catOwner !== 'object') s.catOwner = {};
   { const pd = payDefault(); for(const k of ['earners','earn','ded','slips']) if(!Array.isArray(s.pay[k])) s.pay[k] = pd[k]; if(!s.pay.yet || typeof s.pay.yet !== 'object') s.pay.yet = {}; }
   if(!s.debtPlan || typeof s.debtPlan !== 'object') s.debtPlan = f.debtPlan;
   if(!Array.isArray(s.debtPlan.ids)) s.debtPlan.ids = [];
@@ -467,6 +484,17 @@ const selIds = new Set(); const openGroups = new Set();
 const ym = () => `${Y}-${pad(M)}`;
 const isCurMonth = () => ym() === curYm();
 const monthTx = () => S.tx.filter(t => t.date.startsWith(ym()));
+/* 사용자: 공동 + 3명. 카테고리마다 기본 사용자, 내역마다 바꿀 수 있음 */
+const MEM_IDS = ['common','u1','u2','u3'];
+const memName = id => (S.members.find(m => m.id === id) || S.members[0]).name;
+const catKey = (type, c) => (type === 'income' ? 'i:' : '') + c;
+const catOwnerOf = (type, c) => S.catOwner[catKey(type, c)] || 'common';
+const ownerOf = t => t.owner || (t.type === 'saving' ? 'common' : catOwnerOf(t.type, t.cat));
+let who = 'all';
+const inWho = t => who === 'all' || ownerOf(t) === who;
+const catInWho = (c, type) => who === 'all' || catOwnerOf(type || 'expense', c) === who;
+const whoSeg = () => `<div class="seg whoseg">${[['all','전체'], ...S.members.map(m => [m.id, m.name])].map(([id,l]) => `<button data-who="${id}" class="${who===id?'on':''}">${esc(l)}</button>`).join('')}</div>`;
+const ownTag = (type, c) => { const o = catOwnerOf(type, c); return o === 'common' ? '' : `<span class="own">${esc(memName(o))}</span>`; };
 function sums(list){
   let i=0,e=0,f=0,s=0;
   for(const t of list){
@@ -518,6 +546,7 @@ function renderList(){
       <input type="search" id="q" placeholder="검색 (메모·카테고리)" value="${esc(q)}">
       <div class="seg">${[['all','전체'],['fixed','고정'],['variable','변동'],['income','수입'],['saving','저축']].map(([k,l])=>`<button data-filt="${k}" class="${filt===k?'on':''}">${l}</button>`).join('')}</div>
     </div>
+    <div class="toolbar">${whoSeg()}</div>
     <div id="listBody"></div>`;
   renderListBody();
 }
@@ -525,7 +554,7 @@ function renderListBody(){
   const qq = q.trim().toLowerCase();
   const ok = t => filt==='all' || (filt==='income' ? t.type==='income' : filt==='saving' ? t.type==='saving'
     : t.type==='expense' && (filt==='fixed' ? t.kind==='fixed' : t.kind!=='fixed'));
-  const list = monthTx().filter(t => ok(t) && (!qq || `${t.memo} ${t.cat} ${t.method}`.toLowerCase().includes(qq)))
+  const list = monthTx().filter(t => ok(t) && inWho(t) && (!qq || `${t.memo} ${t.cat} ${t.method}`.toLowerCase().includes(qq)))
     .sort((a,b) => b.date.localeCompare(a.date) || (b.created||0)-(a.created||0));
   if(!list.length){
     $('#listBody').innerHTML = `<p class="empty">${monthTx().length ? '조건에 맞는 내역이 없어요' : '이 달의 내역이 없어요.<br>오른쪽 아래 + 버튼으로 추가해 보세요.'}</p>`;
@@ -547,7 +576,7 @@ function txRow(t){
   const cls = t.type==='income' ? 'inc' : t.type==='saving' ? 'sav' : 'exp';
   return `<button class="item" data-edit="${t.id}">
     <span class="dot" style="background:${t.type==='saving'?'var(--sav)':catColor(t.cat)}"></span>
-    <span class="mid"><b>${esc(t.memo||t.cat)}${t.kind==='fixed'?'<span class="tagk">고정</span>':''}${t.type==='saving'?'<span class="tagk">저축</span>':''}</b><small>${esc(t.cat)}${t.method?' · '+esc(t.method):''}${card?(t.paid?' · 선납완료 ✓':' · 미선납'):''}</small></span>
+    <span class="mid"><b>${esc(t.memo||t.cat)}${t.kind==='fixed'?'<span class="tagk">고정</span>':''}${t.type==='saving'?'<span class="tagk">저축</span>':''}</b><small>${esc(t.cat)}${ownerOf(t) !== 'common' ? ' · ' + esc(memName(ownerOf(t))) : ''}${t.method?' · '+esc(t.method):''}${card?(t.paid?' · 선납완료 ✓':' · 미선납'):''}</small></span>
     <span class="amt ${cls}">${sign}${won(t.amount)}</span></button>`;
 }
 
@@ -568,16 +597,16 @@ function logBudgets(){ const k = curYm(); S.budgetLog = (S.budgetLog || []).filt
 const recBudgetAt = (c, k) => S.recurring.filter(r => r.cat === c && (!r.start || r.start <= k) && (!r.end || r.end >= k)).reduce((s,r)=>s+r.amount,0);
 const catBudgetAt = (c, k) => { const m = budgetMapFor(k); return m[c] != null ? m[c] : recBudgetAt(c, k); };
 function monthBudget(k){
-  let f = 0, v = 0; for(const g of S.groups) for(const c of g.cats){ const x = catBudgetAt(c, k); if(g.fixed) f += x; else v += x; }
-  const m = budgetMapFor(k); return {f, v, e: f + v, inc: S.cats.income.reduce((s,c)=>s+(m['i:'+c]||0),0), sav: savingBudgetTotal()};
+  let f = 0, v = 0; for(const g of S.groups) for(const c of g.cats){ if(!catInWho(c)) continue; const x = catBudgetAt(c, k); if(g.fixed) f += x; else v += x; }
+  const m = budgetMapFor(k); return {f, v, e: f + v, inc: S.cats.income.filter(c => catInWho(c, 'income')).reduce((s,c)=>s+(m['i:'+c]||0),0), sav: who === 'all' || who === 'common' ? savingBudgetTotal() : 0};
 }
 const dualBar = (a, b, color, over) => { const mx = Math.max(a, b, 1); return `<div class="bar dual ${over?'over':''}"><div style="width:${a/mx*100}%;background:${color}"></div>${b?`<i style="left:calc(${b/mx*100}% - 1px)"></i>`:''}</div>`; };
 function renderStats(){
-  const k = ym(), list = monthTx(), sm = sums(list), B = monthBudget(k);
+  const k = ym(), list = monthTx().filter(inWho), sm = sums(list), B = monthBudget(k);
   const days = dim(Y, M), cur = isCurMonth(), past = k < curYm();
   const elapsed = cur ? new Date().getDate() : past ? days : 0, leftDays = days - elapsed + (cur ? 1 : 0);
   const spent = {}; for(const t of list) if(t.type === 'expense') spent[t.cat] = (spent[t.cat]||0) + t.amount;
-  const rows = S.groups.flatMap(g => g.cats.map(c => ({c, g, b: catBudgetAt(c, k), a: spent[c]||0})));
+  const rows = S.groups.flatMap(g => g.cats.filter(c => catInWho(c)).map(c => ({c, g, b: catBudgetAt(c, k), a: spent[c]||0})));
   const withB = rows.filter(r => r.b > 0), kept = withB.filter(r => r.a <= r.b).length;
   const over = withB.filter(r => r.a > r.b).sort((x,y)=>(y.a-y.b)-(x.a-x.b));
   const fast = cur && elapsed > 0 ? withB.filter(r => !r.g.fixed && r.a <= r.b && r.a >= r.b*0.3 && r.a / (r.b*elapsed/days) > 1.15).sort((x,y)=>y.a/y.b-x.a/x.b) : [];
@@ -604,7 +633,7 @@ function renderStats(){
     } else if(past){
       lines.push(`<div class="status"><i>${sm.e <= B.e ? '✅' : '⚠️'}</i><span>${M}월은 예산보다 ${sm.e <= B.e ? `<b class="ok">${won(B.e - sm.e)}원 적게</b>` : `<b class="exp">${won(sm.e - B.e)}원 많이</b>`} 썼어요.</span></div>`);
     } else lines.push(`<div class="status"><i>🗓️</i><span>아직 시작하지 않은 달이에요. 예산 ${won(B.e)}원이 잡혀 있어요.</span></div>`);
-    hero = `<section class="card hero"><span class="muted">${M}월 지출 · 예산 ${cur ? '진행 상황' : past ? '결과' : ''}</span>
+    hero = `<section class="card hero"><span class="muted">${who === 'all' ? '' : esc(memName(who)) + ' · '}${M}월 지출 · 예산 ${cur ? '진행 상황' : past ? '결과' : ''}</span>
       <b class="big ${sm.e > B.e ? 'exp' : ''}">${won(sm.e)}<span class="of"> / ${won(B.e)}원 (${pct}%)</span></b>
       <div class="bar pace ${sm.e > B.e ? 'over' : ''}"><div style="width:${sm.e/mx*100}%;background:${sm.e > B.e ? 'var(--exp)' : 'var(--accent)'}"></div>
         <i style="left:calc(${B.e/mx*100}% - 1px)"></i>${cur ? `<em style="left:${todayPos}%">오늘 적정</em><i style="left:calc(${todayPos}% - 1px);background:var(--muted);width:1px"></i>` : ''}</div>
@@ -613,11 +642,11 @@ function renderStats(){
   }
   const watch = [...over.map(r => ({...r, t:'over'})), ...fast.map(r => ({...r, t:'fast'})), ...noB.slice(0, 6).map(r => ({...r, t:'none'}))];
   const months = []; for(let i=5; i>=0; i--) months.push(addMonths(k, -i));
-  const tr = months.map(mk => { const mt = S.tx.filter(t => t.date.startsWith(mk)); const b = mt.length || mk >= curYm() ? monthBudget(mk).e : 0, x = sums(mt).e; return {mk, b, x}; });
+  const tr = months.map(mk => { const mt = S.tx.filter(t => t.date.startsWith(mk) && inWho(t)); const b = mt.length || mk >= curYm() ? monthBudget(mk).e : 0, x = sums(mt).e; return {mk, b, x}; });
   const tmax = Math.max(1, ...tr.flatMap(d => [d.b, d.x]));
-  const data = months.map(mk => ({m:+mk.slice(5), ...sums(S.tx.filter(t=>t.date.startsWith(mk)))}));
+  const data = months.map(mk => ({m:+mk.slice(5), ...sums(S.tx.filter(t=>t.date.startsWith(mk) && inWho(t)))}));
   const max = Math.max(1, ...data.flatMap(d=>[d.i,d.e,d.s]));
-  const gRows = S.groups.map(g => ({g, b: g.cats.reduce((s,c)=>s+catBudgetAt(c,k),0), a: g.cats.reduce((s,c)=>s+(spent[c]||0),0)})).filter(x => x.b || x.a);
+  const gRows = S.groups.map(g => { const cs = g.cats.filter(c => catInWho(c)); return {g, b: cs.reduce((s,c)=>s+catBudgetAt(c,k),0), a: cs.reduce((s,c)=>s+(spent[c]||0),0)}; }).filter(x => x.b || x.a);
   const at = assetTotals(), aks = ['cash','savings','stocks','use'];
   const nw = `<section class="card nw"><div class="sec-head"><span class="muted">자산 총괄 · 순자산</span><button class="btn sm" data-view="assets">자세히</button></div>
     <b class="big">${won(at.net)}원</b><span class="muted">총자산 ${won(at.gross)} · 대출 <span class="exp">${won(at.debt)}</span></span>
@@ -628,6 +657,7 @@ function renderStats(){
     ${up.ev.length ? up.html + `<div class="bar-cap"><span>나갈 돈 합계</span><b class="exp">${won(up.out)}원</b></div>` : '<p class="note">2주 안에 나갈 고정지출·카드 대금이 없어요. 예산·고정 탭에서 매달 나가는 항목과 카드 결제일을 등록하면 여기에 날짜별로 보여요.</p>'}</section>`;
   $('#view').innerHTML = `
     ${nw}
+    <div class="toolbar who-bar"><span class="muted">누구 기준</span>${whoSeg()}</div>
     ${hero}
     ${upc}
     ${B.e ? `<div class="kpi3">
@@ -636,7 +666,7 @@ function renderStats(){
       <div class="card"><span>저축</span><b class="sav">${short(sm.s)}</b><small>${B.sav ? `목표 ${short(B.sav)} · ${Math.round(sm.s/B.sav*100)}%` : '목표 없음'}</small></div>
     </div>` : ''}
     ${B.e ? `<section class="card"><div class="sec-head"><h3>주의할 항목</h3><button class="btn sm" id="budgetSetup">예산 수정</button></div>
-      ${watch.length ? watch.map(r => `<div class="warn-row"><div class="bar-label"><span><b>${esc(r.c)}</b><span class="badge ${r.t}">${r.t==='over' ? `${won(r.a - r.b)} 초과` : r.t==='fast' ? '빠름' : '예산 없음'}</span><small class="muted"> ${esc(r.g.name)}</small></span><span>${won(r.a)}${r.b ? `<em>/ ${won(r.b)}</em>` : ''}</span></div>
+      ${watch.length ? watch.map(r => `<div class="warn-row"><div class="bar-label"><span><b>${esc(r.c)}</b>${ownTag('expense', r.c)}<span class="badge ${r.t}">${r.t==='over' ? `${won(r.a - r.b)} 초과` : r.t==='fast' ? '빠름' : '예산 없음'}</span><small class="muted"> ${esc(r.g.name)}</small></span><span>${won(r.a)}${r.b ? `<em>/ ${won(r.b)}</em>` : ''}</span></div>
         ${r.b ? dualBar(r.a, r.b, r.t==='over' ? 'var(--exp)' : '#d9a13a', r.t==='over') : ''}</div>`).join('')
         : `<p class="note">👏 예산을 넘었거나 너무 빨리 쓰는 항목이 없어요.</p>`}
       ${fast.length ? '<p class="note">빠름: 남은 날짜에 비해 예산을 빨리 쓰고 있는 항목이에요.</p>' : ''}
@@ -666,9 +696,12 @@ function renderStats(){
 function openBudget(){
   const prev = addMonths(ym(), -1);
   const lastBy = {}; for(const t of S.tx) if(t.date.startsWith(prev)) lastBy[t.type + '|' + t.cat] = (lastBy[t.type + '|' + t.cat]||0) + t.amount;
-  const row = (label, key, val, last, ph) => `<div class="bk-row"><span>${esc(label)}</span><small>지난달 ${short(last||0)}</small><input inputmode="numeric" data-money data-bk="${esc(key)}" value="${val != null ? won(val) : ''}" placeholder="${ph||'0'}"></div>`;
+  const row = (label, key, val, last, ph) => { const type = key.startsWith('i:') ? 'income' : 'expense';
+    return `<div class="bk-row bk4"><input class="bkname" value="${esc(label)}" maxlength="24" data-bkname="${esc(key)}" data-ctype="${type}" aria-label="카테고리 이름">
+      <select class="ownsel" data-bkown="${esc(key)}" aria-label="사용자">${S.members.map(m => `<option value="${m.id}" ${catOwnerOf(type, label)===m.id?'selected':''}>${esc(m.name)}</option>`).join('')}</select>
+      <small>지난달 ${short(last||0)}</small><input inputmode="numeric" data-money data-bk="${esc(key)}" value="${val != null ? won(val) : ''}" placeholder="${ph||'0'}"></div>`; };
   showSheet(`${sheetHead(`월 예산 설정`)}
-    <p class="note">매달 같은 예산이 적용되고, 바꾸면 이번 달부터 반영돼요. 고정 항목은 비워 두면 '매달 나가는 항목' 금액이 자동으로 예산이 돼요.</p>
+    <p class="note">매달 같은 예산이 적용되고, 바꾸면 이번 달부터 반영돼요. 카테고리 <b>이름과 사용자</b>도 여기서 바로 고칠 수 있어요. 고정 항목은 비워 두면 '매달 나가는 항목' 금액이 자동으로 예산이 돼요.</p>
     <div class="row"><button type="button" class="btn sm" id="fillLast">지난달 실사용으로 채우기</button><button type="button" class="btn sm" id="fill3">최근 3개월 평균으로 채우기</button><button type="button" class="btn sm" id="fillClear">모두 비우기</button></div>
     <div class="bk-g">수입</div>${S.cats.income.map(c => row(c, 'i:' + c, S.budgets['i:' + c], lastBy['income|' + c])).join('')}
     ${S.groups.map(g => `<div class="bk-g">${esc(g.name)}${g.fixed ? ' · 고정' : ''}</div>${g.cats.map(c => row(c, c, S.budgets[c], lastBy['expense|' + c], recBudget(c) ? won(recBudget(c)) + ' (자동)' : '0')).join('')}`).join('')}
@@ -693,15 +726,24 @@ function fillBudgets(n){
   updBkTotal(); toast(n === 1 ? '지난달 실사용으로 채웠어요. 확인 후 저장하세요' : '최근 3개월 평균으로 채웠어요. 확인 후 저장하세요');
 }
 function submitBudget(){
-  for(const i of document.querySelectorAll('[data-bk]')){ const raw = i.value.trim(); if(raw === '') delete S.budgets[i.dataset.bk]; else S.budgets[i.dataset.bk] = digits(raw); }
+  // 1) 이름 바꾸기 → 2) 사용자 → 3) 예산 (바뀐 이름 기준)
+  const map = {}; let renamed = 0, dup = 0;
+  for(const i of document.querySelectorAll('[data-bkname]')){
+    const key = i.dataset.bkname, type = i.dataset.ctype, old = type === 'income' ? key.slice(2) : key, nw = i.value.trim();
+    const r = renameCatCore(type, old, nw); if(r === -2) dup++; if(r >= 0) renamed++;
+    map[key] = r >= 0 ? catKey(type, nw) : key;
+  }
+  for(const i of document.querySelectorAll('[data-bkown]')){ const k = map[i.dataset.bkown] || i.dataset.bkown; if(i.value === 'common') delete S.catOwner[k]; else S.catOwner[k] = i.value; }
+  for(const i of document.querySelectorAll('[data-bk]')){ const k = map[i.dataset.bk] || i.dataset.bk, raw = i.value.trim(); if(raw === '') delete S.budgets[k]; else S.budgets[k] = digits(raw); }
+  touchMeta(); if(dup) toast('이미 있는 이름은 바꾸지 않았어요');
   const now = Date.now();
   for(const i of document.querySelectorAll('[data-bsav]')){ const a = S.assets.savings.find(x => x.id === i.dataset.bsav); if(a){ const v = digits(i.value); if(v !== (a.monthly||0)) S.assets.savings = S.assets.savings.map(x => x === a ? {...a, monthly: v, updated: now} : x); } }
-  S.budgetsAt = now; logBudgets(); save(); closeSheet(); render(); toast('예산을 저장했어요');
+  S.budgetsAt = now; logBudgets(); save(); closeSheet(); render(); if(!dup) toast(renamed ? `예산을 저장했어요 · 이름 ${renamed}개 변경` : '예산을 저장했어요');
 }
 
 /* ----- 고정 · 예산 ----- */
 function renderFixed(){
-  const list = monthTx(); const sm = sums(list);
+  const list = monthTx().filter(inWho); const sm = sums(list);
   const items = activeRec().map(r => { const txs = recTxs(r); return {r, txs, amt: txs.reduce((s,t)=>s+t.amount,0), due: recDue(r)}; });
   const plan = items.reduce((s,x)=>s+(x.txs.length ? x.amt : x.r.amount),0);
   const doneItems = items.filter(x=>x.txs.length), doneAmt = doneItems.reduce((s,x)=>s+x.amt,0);
@@ -714,8 +756,10 @@ function renderFixed(){
   };
   const spentBy = {}; for(const t of list) if(t.type==='expense') spentBy[t.cat] = (spentBy[t.cat]||0) + t.amount;
   const incBy = {}; for(const t of list) if(t.type==='income') incBy[t.cat] = (incBy[t.cat]||0) + t.amount;
-  const iB = incBudgetTotal(), sB = savingBudgetTotal();
-  const gRows = S.groups.map(g => ({g, b: groupBudget(g), a: g.cats.reduce((s,c)=>s+(spentBy[c]||0),0)}));
+  const iB = S.cats.income.filter(c => catInWho(c, 'income')).reduce((s,c)=>s+(S.budgets['i:'+c]||0),0), sB = who === 'all' || who === 'common' ? savingBudgetTotal() : 0;
+  const gcats = g => g.cats.filter(c => catInWho(c));
+  const gbud = g => gcats(g).reduce((s,c)=>s+catBudget(c),0);
+  const gRows = S.groups.map(g => ({g, b: gbud(g), a: gcats(g).reduce((s,c)=>s+(spentBy[c]||0),0)})).filter(x => who === 'all' || gcats(x.g).length);
   const eB = gRows.reduce((s,x)=>s+x.b,0);
   const diffCell = (b,a,good) => !b && !a ? '<td>-</td>' : (good ? a>=b : a<=b) ? `<td>${won(Math.abs(b-a))}<small>${good?(a>b?'초과 달성':'달성'):'남음'}</small></td>` : `<td class="exp">${won(Math.abs(a-b))}<small>${good?'부족':'초과'}</small></td>`;
   const remainSimple = items.filter(x => !x.txs.length && !x.r.vary && !x.r.loanId && !x.r.planDebts).length;
@@ -723,7 +767,8 @@ function renderFixed(){
   $('#view').innerHTML = `
     <section class="card"><div class="sec-head"><h3>${M}월 결제 일정</h3><small class="muted">남은 지출 <b class="exp">${won(sc.out)}</b></small></div>
       ${sc.ev.length ? sc.html : '<p class="note">아래 \'매달 나가는 항목\'과 설정의 카드 결제일, 급여 탭의 급여일이 날짜별로 모여요.</p>'}</section>
-    <section class="card"><h3>${M}월 예산 vs 실행</h3>
+    <div class="toolbar who-bar"><span class="muted">누구 기준</span>${whoSeg()}</div>
+    <section class="card"><h3>${who === 'all' ? '' : esc(memName(who)) + ' · '}${M}월 예산 vs 실행</h3>
       <table class="cmp"><tr><th></th><th>예산</th><th>실행</th><th>차이</th></tr>
         <tr><td>수입</td><td>${won(iB)}</td><td class="inc">${won(sm.i)}</td>${diffCell(iB, sm.i, true)}</tr>
         ${gRows.map(x=>`<tr><td>${esc(x.g.name)}${x.g.fixed?' <span class="tagk">고정</span>':''}</td><td>${won(x.b)}</td><td>${won(x.a)}</td>${diffCell(x.b, x.a)}</tr>`).join('')}
@@ -743,13 +788,14 @@ function renderFixed(){
         : `<p class="note">월세·관리비·보험료·통신비처럼 매달 나가는 돈을 추가하면 달마다 완료 여부를 체크할 수 있어요.</p>`}
       ${remainSimple > 1 ? `<div class="row"><button class="btn sm" id="recDoneAll">금액 고정 항목 ${remainSimple}건 모두 완료</button></div>`:''}
     </section>
-    <p class="note" style="margin:4px 2px 8px">그룹을 누르면 카테고리별 예산을 입력하고 실행과 비교할 수 있어요. (실행 / 예산)</p>
+    <div class="sec-head" style="margin:4px 2px 8px"><p class="note" style="margin:0">그룹을 누르면 카테고리별 예산을 입력해요. 이름을 누르면 바로 고칠 수 있어요.</p><button class="btn sm" id="budgetSetup">예산 한 번에 설정</button></div>
     <section class="card"><details data-grp="__income" ${openGroups.has('__income')?'open':''}><summary class="grp-sum"><span>수입</span><span>${won(sm.i)} / ${won(iB)}</span></summary>
-      ${S.cats.income.map(c => budgetRow(c, 'i:'+c, S.budgets['i:'+c], incBy[c]||0, false, true)).join('')}
+      ${S.cats.income.filter(c => catInWho(c, 'income')).map(c => budgetRow(c, 'i:'+c, S.budgets['i:'+c], incBy[c]||0, false, true)).join('')}
     </details></section>
-    ${S.groups.map(g => { const gb = groupBudget(g), ga = g.cats.reduce((s,c)=>s+(spentBy[c]||0),0);
+    ${S.groups.filter(g => who === 'all' || gcats(g).length).map(g => { const gb = gbud(g), ga = gcats(g).reduce((s,c)=>s+(spentBy[c]||0),0);
       return `<section class="card"><details data-grp="${esc(g.id)}" ${openGroups.has(g.id)?'open':''}><summary class="grp-sum"><span>${esc(g.name)}${g.fixed?' <span class="tagk">고정</span>':''}</span><span class="${gb&&ga>gb?'exp':''}">${won(ga)} / ${won(gb)}</span></summary>
-      ${g.cats.length ? g.cats.map(c => budgetRow(c, c, S.budgets[c], spentBy[c]||0, S.budgets[c]==null && recBudget(c)>0)).join('') : '<p class="note">카테고리가 없어요. 설정 → 카테고리 편집에서 추가하세요.</p>'}
+      ${gcats(g).length ? gcats(g).map(c => budgetRow(c, c, S.budgets[c], spentBy[c]||0, S.budgets[c]==null && recBudget(c)>0)).join('') : '<p class="note">카테고리가 없어요. 설정 → 카테고리 편집에서 추가하세요.</p>'}
+      <form class="inline" data-addcat="g:${S.groups.indexOf(g)}" style="margin-top:8px"><input type="text" maxlength="24" placeholder="이 그룹에 카테고리 추가"><button class="btn sm">추가</button></form>
       </details></section>`; }).join('')}
     <section class="card"><div class="sec-head"><h3>저축 목표 vs 실행</h3><small class="muted">자산 탭 예적금의 '월 저금액'</small></div>
       ${S.assets.savings.length ? S.assets.savings.map(a => { const x = list.filter(t=>t.type==='saving' && (t.target===a.id || (!t.target && t.cat===a.name))).reduce((s,t)=>s+t.amount,0), b = a.monthly||0;
@@ -764,7 +810,7 @@ function budgetRow(label, key, b, x, auto, good){
   const has = b != null && b !== '';
   const bv = has ? +b : (auto ? recBudget(label) : 0);
   return `<div class="budget-row">
-    <div><span class="dot" style="background:${catColor(label)}"></span> ${esc(label)}<br><small>실행 <b style="color:var(--ink)">${won(x)}</b>${bv?` / 예산 ${won(bv)}${auto?' (자동)':''} · ${good ? (x>=bv?'<span style="color:var(--accent)">달성</span>':`${won(bv-x)} 부족`) : (x>bv?`<span class="exp">${won(x-bv)} 초과</span>`:`${won(bv-x)} 남음`)}`:''}</small></div>
+    <div><span class="dot" style="background:${catColor(label)}"></span> <button type="button" class="cname" data-cren="${esc(label)}" data-ctype="${key.startsWith('i:') ? 'income' : 'expense'}" title="이름 고치기">${esc(label)}<i>✎</i></button>${ownTag(key.startsWith('i:') ? 'income' : 'expense', label)}<br><small>실행 <b style="color:var(--ink)">${won(x)}</b>${bv?` / 예산 ${won(bv)}${auto?' (자동)':''} · ${good ? (x>=bv?'<span style="color:var(--accent)">달성</span>':`${won(bv-x)} 부족`) : (x>bv?`<span class="exp">${won(x-bv)} 초과</span>`:`${won(bv-x)} 남음`)}`:''}</small></div>
     <input inputmode="numeric" data-budget="${esc(key)}" placeholder="${auto?won(bv)+' (자동)':'예산 입력'}" value="${has?won(b):''}" aria-label="${esc(label)} 예산">
     ${bv||x?`<div class="bar dual ${!good&&bv&&x>bv?'over':''}"><div style="width:${Math.min(100,x/Math.max(bv,x,1)*100)}%;background:${catColor(label)}"></div>${bv?`<i style="left:calc(${bv/Math.max(bv,x)*100}% - 1px)"></i>`:''}</div>`:''}
   </div>`;
@@ -1030,6 +1076,7 @@ function renderSettings(){
           <button class="icon sm" data-grpdel="${gi}" aria-label="그룹 삭제">×</button></div>
         ${g.cats.map((c,ci)=>`<div class="cat-row"><span class="dot" style="background:${catColor(c)}"></span>
           <input value="${esc(c)}" maxlength="24" data-rename="expense" data-old="${esc(c)}" aria-label="카테고리 이름">
+          <select data-catown="${esc(c)}" data-ctype="expense" class="ownsel" aria-label="사용자">${S.members.map(m => `<option value="${m.id}" ${catOwnerOf('expense', c)===m.id?'selected':''}>${esc(m.name)}</option>`).join('')}</select>
           <select data-catgrp="${esc(c)}" aria-label="그룹 이동">${S.groups.map((x,xi)=>`<option value="${xi}" ${xi===gi?'selected':''}>${esc(x.name)}</option>`).join('')}</select>
           <button class="icon sm" data-move="${gi}" data-idx="${ci}" data-dir="-1" aria-label="위로">↑</button>
           <button class="icon sm" data-move="${gi}" data-idx="${ci}" data-dir="1" aria-label="아래로">↓</button>
@@ -1038,6 +1085,7 @@ function renderSettings(){
       </div>`).join('') + `<form class="inline" data-addgroup style="margin-top:14px"><input type="text" maxlength="20" placeholder="새 그룹 이름 (예: 생활비·아빠)"><button class="btn">그룹 추가</button></form>`
     : S.cats.income.map((c,i)=>`<div class="cat-row"><span class="dot" style="background:${catColor(c)}"></span>
         <input value="${esc(c)}" maxlength="24" data-rename="income" data-old="${esc(c)}" aria-label="카테고리 이름">
+        <select data-catown="${esc(c)}" data-ctype="income" class="ownsel" aria-label="사용자">${S.members.map(m => `<option value="${m.id}" ${catOwnerOf('income', c)===m.id?'selected':''}>${esc(m.name)}</option>`).join('')}</select>
         <button class="icon sm" data-imove="${i}" data-dir="-1" aria-label="위로">↑</button><button class="icon sm" data-imove="${i}" data-dir="1" aria-label="아래로">↓</button>
         <button class="icon sm" data-delcat="income" data-name="${esc(c)}" aria-label="삭제">×</button></div>`).join('')
       + `<form class="inline" data-addcat="income"><input type="text" maxlength="24" placeholder="새 수입 카테고리"><button class="btn">추가</button></form>`;
@@ -1055,6 +1103,10 @@ function renderSettings(){
     <section class="card"><h3>📥 엑셀 가계부 불러오기</h3>
       <p class="note">쓰던 엑셀 파일(.xlsx)을 고르면 <b>이 기기 안에서만</b> 읽어서 카테고리 구조·자산·대출·월별 금액·예산·적립 통장·가족계를 가져와요. 파일은 어디로도 전송되지 않아요. 적용 전에 미리보기로 확인할 수 있어요.</p>
       <label class="btn primary file-btn">엑셀 파일 선택<input type="file" id="xlFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></label>
+    </section>
+    <section class="card"><h3>👥 사용자</h3>
+      <p class="note">공동과 사용자 3명의 이름을 정하세요. 카테고리마다 기본 사용자를 정하면(아래 카테고리 편집이나 예산 설정에서), 분석·내역·예산을 사람별로 나눠 볼 수 있어요. 내역을 입력할 때 '누가'를 바꿀 수도 있어요.</p>
+      <div class="two">${S.members.map((m,i) => `<label class="field"><span>${i === 0 ? '공동' : '사용자 ' + i}</span><input type="text" maxlength="10" data-memname="${m.id}" value="${esc(m.name)}"></label>`).join('')}</div>
     </section>
     <section class="card"><div class="sec-head"><h3>카테고리 편집</h3>
       <div class="seg">${[['expense','지출'],['income','수입']].map(([k,l])=>`<button data-cattab="${k}" class="${catTab===k?'on':''}">${l}</button>`).join('')}</div></div>
@@ -1097,11 +1149,21 @@ function renderSettings(){
   prepareSync();
 }
 function renameCat(type, old, nw){
-  nw = nw.trim().slice(0,24);
+  const n = renameCatCore(type, old, nw);
+  if(n === -2) toast('이미 있는 이름이에요');
+  if(n >= 0){ save(); toast(`'${old}' → '${nw.trim()}'${n?` (내역 ${n}건 함께 변경)`:''}`); }
+  render();
+}
+// 반환: 바뀐 내역 수, -1 변경 없음, -2 중복
+function renameCatCore(type, old, nw){
+  nw = String(nw).trim().slice(0,24);
   const list = type === 'income' ? S.cats.income : S.cats.expense;
-  if(!nw || nw === old){ renderSettings(); return; }
-  if(list.includes(nw)){ toast('이미 있는 이름이에요'); renderSettings(); return; }
+  if(!nw || nw === old) return -1;
+  if(list.includes(nw)) return -2;
   const now = Date.now(); let n = 0;
+  const ok = catKey(type, old), nk = catKey(type, nw);
+  if(S.catOwner[ok] != null){ S.catOwner[nk] = S.catOwner[ok]; delete S.catOwner[ok]; }
+  if(type === 'income') for(const e of payEarners()) if(e.incomeCat === old) e.incomeCat = nw;
   if(type === 'income'){ S.cats.income[S.cats.income.indexOf(old)] = nw; if(S.budgets['i:'+old] != null){ S.budgets['i:'+nw] = S.budgets['i:'+old]; delete S.budgets['i:'+old]; S.budgetsAt = now; } }
   else {
     for(const g of S.groups) g.cats = g.cats.map(c => c===old ? nw : c);
@@ -1112,7 +1174,7 @@ function renameCat(type, old, nw){
     S.pools.forEach(p => { p.cats = (p.cats||[]).map(c => c===old ? nw : c); });
   }
   for(const t of S.tx) if(t.type===type && t.cat===old){ t.cat = nw; t.updated = now; n++; }
-  touchMeta(); save(); renderSettings(); toast(`'${old}' → '${nw}'${n?` (내역 ${n}건 함께 변경)`:''}`);
+  touchMeta(); return n;
 }
 function renameCard(i, nw){
   nw = nw.trim().slice(0,20); const old = S.cards[i].name;
@@ -1409,7 +1471,7 @@ const catCheckList = (name, sel) => S.groups.map(g => `<div class="grp-title">${
 
 /* 내역 */
 function openTx(t){
-  editing = t || null; formType = t ? t.type : 'expense'; formKind = (t && t.kind) || 'variable'; kindManual = !!t;
+  editing = t || null; formType = t ? t.type : 'expense'; formKind = (t && t.kind) || 'variable'; kindManual = !!t; ownerManual = !!(t && t.owner);
   showSheet(`${sheetHead(t?'내역 수정':'새 내역')}
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <div class="seg"><button type="button" data-ft="expense">지출</button><button type="button" data-ft="income">수입</button><button type="button" data-ft="saving">저축</button></div>
@@ -1418,6 +1480,7 @@ function openTx(t){
     <label class="amount-field"><input id="fAmt" inputmode="numeric" placeholder="0" value="${t?won(t.amount):''}" aria-label="금액"><span>원</span></label>
     <label class="field"><span>날짜</span><input type="date" id="fDate" value="${t?t.date:defaultDate()}" required></label>
     <div class="field"><span id="fCatLabel">카테고리</span><div class="chips" id="fCats"></div></div>
+    <div class="field"><span>누가</span><div class="chips" id="fOwner"></div></div>
     <div class="field"><span>결제수단</span><div class="chips" id="fMethods"></div></div>
     <label class="ck" id="fPaidWrap"><input type="checkbox" id="fPaid" ${t&&t.paid?'checked':''}> 카드 선납 완료</label>
     <label class="field"><span>메모</span><input type="text" id="fMemo" maxlength="80" value="${esc(t?t.memo:'')}" placeholder="예: 마트 장보기"></label>
@@ -1444,11 +1507,18 @@ function fillTxChips(cat, method){
     $('#fCats').innerHTML = S.groups.filter(g=>g.cats.length).map(g => `<div class="chip-grp">${esc(g.name)}</div>${chipList('fCat', g.cats, sel)}`).join('')
       + (cat && !all.includes(cat) ? chipList('fCat', [cat], sel) : '') + `<button type="button" class="chip-add" id="fCatAdd">+ 추가</button>`;
   }
-  setKindSeg();
+  setKindSeg(); fillOwner();
   const ms = allMethods(); if(method && !ms.includes(method)) ms.push(method);
   const curM = method || radioVal('fMethod') || (formType==='saving' && ms.includes('계좌이체') ? '계좌이체' : ms[0]);
   $('#fMethods').innerHTML = chipList('fMethod', ms, curM);
   updatePaidVis();
+}
+let ownerManual = false;
+function fillOwner(){
+  const el = $('#fOwner'); if(!el) return;
+  const cur = radioVal('fOwner'), def = formType === 'saving' ? 'common' : catOwnerOf(formType, radioVal('fCat') || '');
+  const sel = ownerManual ? (cur || (editing && editing.owner) || def) : (editing && editing.owner && !cur ? editing.owner : def);
+  el.innerHTML = S.members.map(m => `<label class="chip"><input type="radio" name="fOwner" value="${m.id}" ${m.id===sel?'checked':''}><span>${esc(m.name)}</span></label>`).join('');
 }
 const setKindSeg = () => document.querySelectorAll('[data-fk]').forEach(b=>b.classList.toggle('on', b.dataset.fk===formKind));
 const updatePaidVis = () => { $('#fPaidWrap').hidden = !(formType==='expense' && isCard(radioVal('fMethod'))); };
@@ -1478,6 +1548,7 @@ function submitTx(){
   }
   if(editing && editing.rid) rec.rid = editing.rid;
   if(editing && editing.imported) rec.imported = true;
+  { const o = radioVal('fOwner'), def = formType === 'saving' ? 'common' : catOwnerOf(formType, rec.cat); if(o && o !== def) rec.owner = o; }
   if(editing) savingDelta(editing, -1);
   savingDelta(rec, +1);
   if(editing) S.tx = S.tx.map(t => t.id===rec.id ? rec : t); else S.tx.push(rec);
@@ -1797,6 +1868,7 @@ function cleanTx(t){
   if(o.type === 'saving' && typeof t.target === 'string') o.target = t.target.slice(0,60);
   if(t.imported) o.imported = true;
   if(typeof t.rid === 'string') o.rid = t.rid.slice(0,60);
+  if(MEM_IDS.includes(t.owner)) o.owner = t.owner;
   return o;
 }
 const okId = x => x && typeof x.id === 'string' ? x.id.slice(0,60) : null;
@@ -1850,6 +1922,8 @@ function merge(inc){
     const dp = inc.debtPlan || {};
     S.debtPlan = {monthly:Math.round(num(dp.monthly)), ids:(Array.isArray(dp.ids)?dp.ids:[]).map(x=>str(x,60)), order:['rate','small','list'].includes(dp.order)?dp.order:'rate', day:Math.min(31,Math.max(1,Math.round(num(dp.day))||25))};
     rebuildCats();
+    if(Array.isArray(inc.members) && inc.members.length === 4) S.members = MEM_IDS.map((id,i) => ({id, name: str((inc.members.find(m => m && m.id === id) || {}).name, 10) || ['공동','사용자1','사용자2','사용자3'][i]}));
+    if(inc.catOwner && typeof inc.catOwner === 'object') S.catOwner = Object.fromEntries(Object.entries(inc.catOwner).filter(([,v]) => MEM_IDS.includes(v)).map(([k,v]) => [str(k,40), v]));
     if(inc.pay && Array.isArray(inc.pay.earners) && inc.pay.earners.length){
       S.pay.earners = inc.pay.earners.filter(e => e && typeof e.id === 'string').map(e => ({id: e.id.slice(0,60), name: str(e.name,12), hire: okDate(e.hire), payDay: Math.min(31, Math.round(num(e.payDay))), incomeCat: str(e.incomeCat,20) || '급여', link: !!e.link,
         sevWage3: e.sevWage3 ? Math.round(num(e.sevWage3)) : '', sevBonus: e.sevBonus === '' || e.sevBonus == null ? '' : Math.round(num(e.sevBonus)), sevLeave: e.sevLeave === '' || e.sevLeave == null ? '' : Math.round(num(e.sevLeave))}));
@@ -2370,6 +2444,9 @@ document.addEventListener('click', e => {
   if(el('#monthLabel')){ if(lpFired){ lpFired = false; return; } const n=new Date(); Y=n.getFullYear(); M=n.getMonth()+1; render(); return; }
   if(el('#fab')){ openTx(); return; }
   if(el('#budgetSetup')){ openBudget(); return; }
+  if((b = el('[data-who]'))){ who = b.dataset.who; render(); return; }
+  if((b = el('[data-cren]'))){ const type = b.dataset.ctype, old = b.dataset.cren; const inp = document.createElement('input');
+    inp.value = old; inp.maxLength = 24; inp.className = 'cname-edit'; inp.dataset.rename = type; inp.dataset.old = old; b.replaceWith(inp); inp.focus(); inp.select(); return; }
   if((b = el('[data-payw]'))){ payWho = b.dataset.payw; render(); return; }
   if(el('#paySetup')){ openPaySetup(); return; }
   if(el('#slipEdit')){ openSlip(); return; }
@@ -2586,8 +2663,9 @@ document.addEventListener('submit', e => {
   } else if(key.startsWith('g:')){
     if(S.cats.expense.includes(name)){ toast('이미 있는 카테고리예요 (다른 그룹 포함)'); return; }
     S.groups[+key.slice(2)].cats.push(name); rebuildCats();
+    if(who !== 'all') S.catOwner[name] = who;
   }
-  touchMeta(); save(); renderSettings();
+  touchMeta(); save(); render();
 });
 document.addEventListener('input', e => {
   const t = e.target;
@@ -2607,19 +2685,22 @@ document.addEventListener('change', e => {
     S.budgetsAt = Date.now(); logBudgets(); save(); render(); return;
   }
   if(t.dataset.rename !== undefined){ renameCat(t.dataset.rename, t.dataset.old, t.value); return; }
+  if(t.dataset.catown !== undefined){ const k = catKey(t.dataset.ctype, t.dataset.catown); if(t.value === 'common') delete S.catOwner[k]; else S.catOwner[k] = t.value; touchMeta(); save(); toast(`'${t.dataset.catown}' → ${memName(t.value)}`); return; }
+  if(t.dataset.memname !== undefined){ const m = S.members.find(x => x.id === t.dataset.memname); const v = t.value.trim().slice(0,10); if(m && v){ m.name = v; touchMeta(); save(); } return; }
   if(t.dataset.grpname !== undefined){ const nm = t.value.trim().slice(0,20); const g = S.groups[+t.dataset.grpname]; if(nm && !S.groups.some(x=>x!==g && x.name===nm)){ g.name = nm; touchMeta(); save(); } renderSettings(); return; }
   if(t.dataset.catgrp !== undefined){ const c = t.dataset.catgrp, to = S.groups[+t.value]; for(const g of S.groups) g.cats = g.cats.filter(x=>x!==c); to.cats.push(c); rebuildCats(); touchMeta(); save(); renderSettings(); return; }
   if(t.dataset.cardname !== undefined){ renameCard(+t.dataset.cardname, t.value); return; }
   if(t.dataset.payday !== undefined){ S.cards[+t.dataset.payday].payDay = +t.value; touchMeta(); save(); return; }
   if(t.dataset.cardtarget !== undefined){ S.cards[+t.dataset.cardtarget].target = digits(t.value); touchMeta(); save(); return; }
   if(t.dataset.sel !== undefined){ t.checked ? selIds.add(t.dataset.sel) : selIds.delete(t.dataset.sel); renderSelbar(); return; }
-  if(t.name === 'fCat' && !kindManual && formType === 'expense'){ formKind = S.fixedCats.includes(t.value) ? 'fixed' : 'variable'; setKindSeg(); return; }
+  if(t.name === 'fOwner'){ ownerManual = true; return; }
+  if(t.name === 'fCat'){ if(!ownerManual) fillOwner(); if(!kindManual && formType === 'expense'){ formKind = S.fixedCats.includes(t.value) ? 'fixed' : 'variable'; setKindSeg(); } return; }
   if(t.name === 'fMethod'){ updatePaidVis(); return; }
   if((t.id==='importFile' || t.id==='syncFile') && t.files[0]){ importBackup(t.files[0]); t.value=''; return; }
   if(t.id==='xlFile' && t.files[0]){ const f = t.files[0]; t.value=''; handleXl(f); }
 });
 document.addEventListener('keydown', e => {
-  if(e.key==='Enter' && e.target.matches && e.target.matches('[data-rename],[data-cardname],[data-grpname],[data-cardtarget]')){ e.preventDefault(); e.target.blur(); return; }
+  if(e.key==='Enter' && e.target.matches && e.target.matches('[data-rename],[data-cardname],[data-grpname],[data-cardtarget],[data-memname]')){ e.preventDefault(); e.target.blur(); return; }
   if(e.key==='Escape' && !$('#sheet').hidden){ closeSheet(); return; }
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
   if(!typing && $('#sheet').hidden && (e.key==='n' || e.key==='+') && !e.metaKey && !e.ctrlKey && !['assets','secret','settings'].includes(view)){ e.preventDefault(); openTx(); }
