@@ -294,6 +294,14 @@ label.mini input{width:16px;height:16px;accent-color:var(--accent)}
 @media (max-width:520px){.bk-row.bk4{grid-template-columns:minmax(0,1fr) auto 100px}.bk-row.bk4 small{display:none}}
 .mem-row{display:block;width:100%;border:0;background:none;text-align:left;padding:10px 0;border-top:1px solid var(--line);cursor:pointer}
 .mem-row:first-of-type{border-top:0}
+/* 입력 창의 저장 버튼은 항상 아래에 떠 있게 */
+.sheet-panel .actions{position:sticky;bottom:calc(-18px - env(safe-area-inset-bottom));z-index:3;background:var(--card);margin:18px -18px calc(-18px - env(safe-area-inset-bottom));padding:10px 18px calc(12px + env(safe-area-inset-bottom));border-top:1px solid var(--line);box-shadow:0 -8px 16px -10px rgba(0,0,0,.18);align-items:center}
+.bk-tot-inline{display:flex;flex-direction:column;flex:none;margin-right:6px;font-variant-numeric:tabular-nums}
+.bk-tot-inline small{font-size:11px;color:var(--muted)}
+.bk-tot-inline b{font-size:16px}
+.bk-row.bk-sub{grid-template-columns:minmax(0,1fr) auto 110px;padding-left:10px}
+.bk-row.bk-sub span{color:var(--muted);font-size:13px}
+.own.mute{background:var(--soft);color:var(--muted)}
 </style>
 </head>
 <body>
@@ -516,6 +524,20 @@ const inWho = t => who === 'all' || ownerOf(t) === who;
 const catInWho = (c, type) => who === 'all' || catOwnerOf(type || 'expense', c) === who;
 const whoSeg = () => `<div class="seg whoseg">${[['all','전체'], ...S.members.map(m => [m.id, m.name])].map(([id,l]) => `<button data-who="${id}" class="${who===id?'on':''}">${esc(l)}</button>`).join('')}</div>`;
 const ownSel = (sel = 'common') => `<select class="ownsel" data-addown aria-label="사용자">${S.members.map(m => `<option value="${m.id}" ${m.id===sel?'selected':''}>${esc(m.name)}</option>`).join('')}</select>`;
+// 공동 수입 카테고리(예: 급여)는 사용자별 예산을 'i:급여#u1'처럼 나눠 저장
+const incSplit = (c, m = S.budgets) => ({common: m['i:'+c] || 0, u1: m['i:'+c+'#u1'] || 0, u2: m['i:'+c+'#u2'] || 0, u3: m['i:'+c+'#u3'] || 0});
+function incBud(c, m = S.budgets){
+  const own = catOwnerOf('income', c), sp = incSplit(c, m);
+  if(own !== 'common') return who === 'all' || who === own ? sp.common : 0;
+  return who === 'all' ? sp.common + sp.u1 + sp.u2 + sp.u3 : sp[who] || 0;
+}
+// 수입 행: 공동 카테고리는 사용자별로 줄을 나눠 보여 줌
+function incRows(c){
+  if(catOwnerOf('income', c) !== 'common') return catInWho(c, 'income') ? [{key: 'i:'+c, mem: null}] : [];
+  const ids = who === 'all' ? MEM_IDS : [who];
+  return ids.filter(id => id === 'common' || who !== 'all' || incSplit(c)[id] || S.tx.some(t => t.type === 'income' && t.cat === c && ownerOf(t) === id) || payEarners().some(e => e.member === id && catLabel(e.incomeCat||'급여') === c))
+    .map(id => ({key: 'i:'+c+(id === 'common' ? '' : '#'+id), mem: id}));
+}
 const ownTag = (type, c) => { const o = catOwnerOf(type, c); return o === 'common' ? '' : `<span class="own">${esc(memName(o))}</span>`; };
 function sums(list){
   let i=0,e=0,f=0,s=0;
@@ -620,7 +642,7 @@ const recBudgetAt = (c, k) => S.recurring.filter(r => r.cat === c && (!r.start |
 const catBudgetAt = (c, k) => { const m = budgetMapFor(k); return m[c] != null ? m[c] : recBudgetAt(c, k); };
 function monthBudget(k){
   let f = 0, v = 0; for(const g of S.groups) for(const c of g.cats){ if(!catInWho(c)) continue; const x = catBudgetAt(c, k); if(g.fixed) f += x; else v += x; }
-  const m = budgetMapFor(k); return {f, v, e: f + v, inc: S.cats.income.filter(c => catInWho(c, 'income')).reduce((s,c)=>s+(m['i:'+c]||0),0), sav: who === 'all' || who === 'common' ? savingBudgetTotal() : 0};
+  const m = budgetMapFor(k); return {f, v, e: f + v, inc: S.cats.income.reduce((s,c)=>s+incBud(c, m),0), sav: who === 'all' || who === 'common' ? savingBudgetTotal() : 0};
 }
 const dualBar = (a, b, color, over) => { const mx = Math.max(a, b, 1); return `<div class="bar dual ${over?'over':''}"><div style="width:${a/mx*100}%;background:${color}"></div>${b?`<i style="left:calc(${b/mx*100}% - 1px)"></i>`:''}</div>`; };
 // 사람별 예산 현황: 각자 맡은 카테고리 예산 대비 각자 쓴 돈
@@ -698,7 +720,7 @@ function renderStats(){
     ${hero}
     ${who === 'all' ? memberCard(k) : ''}
     ${upc}
-    ${B.e ? `<div class="kpi3">
+    ${B.e || B.inc ? `<div class="kpi3">
       <div class="card"><span>예산 지킨 항목</span><b class="${kept < withB.length ? '' : 'ok'}">${kept}/${withB.length}</b><small>${withB.length ? Math.round(kept/withB.length*100) : 0}%</small></div>
       <div class="card"><span>수입</span><b class="inc">${short(sm.i)}</b><small>${B.inc ? `예산 ${short(B.inc)} · ${Math.round(sm.i/B.inc*100)}%` : '예산 없음'}</small></div>
       <div class="card"><span>저축</span><b class="sav">${short(sm.s)}</b><small>${B.sav ? `목표 ${short(B.sav)} · ${Math.round(sm.s/B.sav*100)}%` : '목표 없음'}</small></div>
@@ -741,11 +763,11 @@ function openBudget(){
   showSheet(`${sheetHead(`월 예산 설정`)}
     <p class="note">매달 같은 예산이 적용되고, 바꾸면 이번 달부터 반영돼요. 카테고리 <b>이름과 사용자</b>는 고치는 즉시 반영돼요(같은 이름도 사용자가 다르면 따로 쓸 수 있어요). 고정 항목은 비워 두면 '매달 나가는 항목' 금액이 자동으로 예산이 돼요.</p>
     <div class="row"><button type="button" class="btn sm" id="fillLast">지난달 실사용으로 채우기</button><button type="button" class="btn sm" id="fill3">최근 3개월 평균으로 채우기</button><button type="button" class="btn sm" id="fillClear">모두 비우기</button></div>
-    <div class="bk-g">수입</div>${S.cats.income.map(c => row(c, 'i:' + c, S.budgets['i:' + c], lastBy['income|' + c])).join('')}
+    <div class="bk-g">수입 <small class="muted">(공동 카테고리는 사람별로 나눠 입력)</small></div>${S.cats.income.map(c => row(c, 'i:' + c, S.budgets['i:' + c], lastBy['income|' + c])
+      + (catOwnerOf('income', c) === 'common' ? MEM_IDS.slice(1).map(id => `<div class="bk-row bk-sub"><span>└ ${esc(memName(id))}</span><small>지난달 ${short(S.tx.filter(t => t.type==='income' && t.cat===c && ownerOf(t)===id && t.date.startsWith(prev)).reduce((s,t)=>s+t.amount,0))}</small><input inputmode="numeric" data-money data-bk="i:${esc(c)}#${id}" value="${S.budgets['i:'+c+'#'+id] != null ? won(S.budgets['i:'+c+'#'+id]) : ''}" placeholder="0"></div>`).join('') : '')).join('')}
     ${S.groups.map(g => `<div class="bk-g">${esc(g.name)}${g.fixed ? ' · 고정' : ''}</div>${g.cats.map(c => row(c, c, S.budgets[c], lastBy['expense|' + c], recBudget(c) ? won(recBudget(c)) + ' (자동)' : '0')).join('')}`).join('')}
     ${S.assets.savings.length ? `<div class="bk-g">저축 목표 (월 저금액)</div>${S.assets.savings.map(a => `<div class="bk-row"><span>${esc(a.name)}</span><small>지난달 ${short(S.tx.filter(t=>t.type==='saving'&&t.target===a.id&&t.date.startsWith(prev)).reduce((s,t)=>s+t.amount,0))}</small><input inputmode="numeric" data-money data-bsav="${a.id}" value="${a.monthly ? won(a.monthly) : ''}" placeholder="0"></div>`).join('')}` : ''}
-    <div class="bk-total"><span>지출 예산 합계</span><span id="bkTotal">-</span></div>
-    <div class="actions"><button type="submit" class="btn primary">예산 저장</button></div>`, 'budget');
+    <div class="actions"><span class="bk-tot-inline"><small>지출 예산 합계</small><b id="bkTotal">-</b></span><button type="submit" class="btn primary">예산 저장</button></div>`, 'budget');
   updBkTotal();
 }
 function updBkTotal(){
@@ -757,7 +779,9 @@ function fillBudgets(n){
   const ks = []; for(let i=1; i<=n; i++) ks.push(addMonths(ym(), -i));
   const by = {}; for(const t of S.tx) if(ks.some(k => t.date.startsWith(k))) by[t.type + '|' + t.cat] = (by[t.type + '|' + t.cat]||0) + t.amount;
   for(const i of document.querySelectorAll('[data-bk]')){
-    const key = i.dataset.bk, v = key.startsWith('i:') ? by['income|' + key.slice(2)] : by['expense|' + key];
+    const key = i.dataset.bk, [base, mem] = key.split('#');
+    const v = mem ? S.tx.filter(t => t.type==='income' && t.cat===base.slice(2) && ownerOf(t)===mem && ks.some(k => t.date.startsWith(k))).reduce((s,t)=>s+t.amount,0)
+      : key.startsWith('i:') ? S.tx.filter(t => t.type==='income' && t.cat===key.slice(2) && ownerOf(t)==='common' && ks.some(k => t.date.startsWith(k))).reduce((s,t)=>s+t.amount,0) : by['expense|' + key];
     i.value = v ? won(Math.round(v / n / 1000) * 1000) : '';
   }
   for(const i of document.querySelectorAll('[data-bsav]')){ const v = S.tx.filter(t=>t.type==='saving'&&t.target===i.dataset.bsav&&ks.some(k=>t.date.startsWith(k))).reduce((s,t)=>s+t.amount,0); if(v) i.value = won(Math.round(v/n/1000)*1000); }
@@ -806,7 +830,7 @@ function renderFixed(){
   };
   const spentBy = {}; for(const t of list) if(t.type==='expense') spentBy[t.cat] = (spentBy[t.cat]||0) + t.amount;
   const incBy = {}; for(const t of list) if(t.type==='income') incBy[t.cat] = (incBy[t.cat]||0) + t.amount;
-  const iB = S.cats.income.filter(c => catInWho(c, 'income')).reduce((s,c)=>s+(S.budgets['i:'+c]||0),0), sB = who === 'all' || who === 'common' ? savingBudgetTotal() : 0;
+  const iB = S.cats.income.reduce((s,c)=>s+incBud(c),0), sB = who === 'all' || who === 'common' ? savingBudgetTotal() : 0;
   const gcats = g => g.cats.filter(c => catInWho(c));
   const gbud = g => gcats(g).reduce((s,c)=>s+catBudget(c),0);
   const gRows = S.groups.map(g => ({g, b: gbud(g), a: gcats(g).reduce((s,c)=>s+(spentBy[c]||0),0)})).filter(x => who === 'all' || gcats(x.g).length);
@@ -840,7 +864,7 @@ function renderFixed(){
     </section>
     <div class="sec-head" style="margin:4px 2px 8px"><p class="note" style="margin:0">그룹을 누르면 카테고리별 예산을 입력해요. 이름을 누르면 바로 고칠 수 있어요.</p><button class="btn sm" id="budgetSetup">예산 한 번에 설정</button></div>
     <section class="card"><details data-grp="__income" ${openGroups.has('__income')?'open':''}><summary class="grp-sum"><span>수입</span><span>${won(sm.i)} / ${won(iB)}</span></summary>
-      ${S.cats.income.filter(c => catInWho(c, 'income')).map(c => budgetRow(c, 'i:'+c, S.budgets['i:'+c], incBy[c]||0, false, true)).join('')}
+      ${S.cats.income.flatMap(c => incRows(c).map(r => budgetRow(c, r.key, S.budgets[r.key], list.filter(t => t.type === 'income' && t.cat === c && (!r.mem || ownerOf(t) === r.mem)).reduce((s,t)=>s+t.amount,0), false, true, r.mem))).join('')}
     </details></section>
     ${S.groups.filter(g => who === 'all' || gcats(g).length).map(g => { const gb = gbud(g), ga = gcats(g).reduce((s,c)=>s+(spentBy[c]||0),0);
       return `<section class="card"><details data-grp="${esc(g.id)}" ${openGroups.has(g.id)?'open':''}><summary class="grp-sum"><span>${esc(g.name)}${g.fixed?' <span class="tagk">고정</span>':''}</span><span class="${gb&&ga>gb?'exp':''}">${won(ga)} / ${won(gb)}</span></summary>
@@ -856,11 +880,11 @@ function renderFixed(){
     ${fundsHtml()}
     <p class="note">○를 누르면 완료되고 가계부 내역에 자동으로 기록돼요. 예산 칸을 비우면 예산 없음, 0을 넣으면 0원 예산이에요.</p>`;
 }
-function budgetRow(label, key, b, x, auto, good){
+function budgetRow(label, key, b, x, auto, good, mem){
   const has = b != null && b !== '';
   const bv = has ? +b : (auto ? recBudget(label) : 0);
   return `<div class="budget-row">
-    <div><span class="dot" style="background:${catColor(label)}"></span> <button type="button" class="cname" data-cren="${esc(label)}" data-ctype="${key.startsWith('i:') ? 'income' : 'expense'}" title="이름 고치기">${esc(catLabel(label))}<i>✎</i></button>${ownTag(key.startsWith('i:') ? 'income' : 'expense', label)}<br><small>실행 <b style="color:var(--ink)">${won(x)}</b>${bv?` / 예산 ${won(bv)}${auto?' (자동)':''} · ${good ? (x>=bv?'<span style="color:var(--accent)">달성</span>':`${won(bv-x)} 부족`) : (x>bv?`<span class="exp">${won(x-bv)} 초과</span>`:`${won(bv-x)} 남음`)}`:''}</small></div>
+    <div><span class="dot" style="background:${catColor(label)}"></span> <button type="button" class="cname" data-cren="${esc(label)}" data-ctype="${key.startsWith('i:') ? 'income' : 'expense'}" title="이름 고치기">${esc(catLabel(label))}<i>✎</i></button>${mem ? `<span class="own ${mem === 'common' ? 'mute' : ''}">${esc(memName(mem))}</span>` : ownTag(key.startsWith('i:') ? 'income' : 'expense', label)}<br><small>실행 <b style="color:var(--ink)">${won(x)}</b>${bv?` / 예산 ${won(bv)}${auto?' (자동)':''} · ${good ? (x>=bv?'<span style="color:var(--accent)">달성</span>':`${won(bv-x)} 부족`) : (x>bv?`<span class="exp">${won(x-bv)} 초과</span>`:`${won(bv-x)} 남음`)}`:''}</small></div>
     <input inputmode="numeric" data-budget="${esc(key)}" placeholder="${auto?won(bv)+' (자동)':'예산 입력'}" value="${has?won(b):''}" aria-label="${esc(catFull(label))} 예산">
     ${bv||x?`<div class="bar dual ${!good&&bv&&x>bv?'over':''}"><div style="width:${Math.min(100,x/Math.max(bv,x,1)*100)}%;background:${catColor(label)}"></div>${bv?`<i style="left:calc(${bv/Math.max(bv,x)*100}% - 1px)"></i>`:''}</div>`:''}
   </div>`;
@@ -1222,7 +1246,8 @@ function renameCatCore(type, old, nw){
   const ok = catKey(type, old), nk = catKey(type, nw);
   if(S.catOwner[ok] != null){ S.catOwner[nk] = S.catOwner[ok]; delete S.catOwner[ok]; }
   for(const e of S.budgetLog || []) if(e.b && e.b[ok] != null){ e.b[nk] = e.b[ok]; delete e.b[ok]; }
-  if(type === 'income') for(const e of payEarners()) if(catName(e.incomeCat || '급여', e.member) === old){ e.incomeCat = catLabel(nw); e.member = sufOwner(nw) || 'common'; }
+  if(type === 'income') for(const id of ['u1','u2','u3']) for(const m of [S.budgets, ...(S.budgetLog || []).map(e => e.b || {})]) if(m['i:'+old+'#'+id] != null){ m['i:'+nw+'#'+id] = m['i:'+old+'#'+id]; delete m['i:'+old+'#'+id]; }
+  if(type === 'income') for(const e of payEarners()) if(catLabel(e.incomeCat || '급여') === old) e.incomeCat = nw;
   if(type === 'income'){ S.cats.income[S.cats.income.indexOf(old)] = nw; if(S.budgets['i:'+old] != null){ S.budgets['i:'+nw] = S.budgets['i:'+old]; delete S.budgets['i:'+old]; S.budgetsAt = now; } }
   else {
     for(const g of S.groups) g.cats = g.cats.map(c => c===old ? nw : c);
@@ -1306,8 +1331,9 @@ function syncPayTx(sl){
   const e = payEarners().find(x => x.id === sl.earner), id = 'pay-' + sl.id;
   const ex = S.tx.find(t => t.id === id);
   if(!e || !e.link){ if(ex){ S.tx = S.tx.filter(t => t.id !== id); S.deleted[id] = Date.now(); } return; }
-  const cat = catName(e.incomeCat || '급여', e.member); if(!S.cats.income.includes(cat)){ S.cats.income.unshift(cat); touchMeta(); }
+  const cat = catLabel(e.incomeCat || '급여'); if(!S.cats.income.includes(cat)){ S.cats.income.unshift(cat); touchMeta(); }
   const now = Date.now(), t = {id, type:'income', amount: Math.max(0, slipNet(sl)), date: sl.date || `${sl.ym}-${pad(Math.min(e.payDay||25, dim(+sl.ym.slice(0,4), +sl.ym.slice(5))))}`, cat, method:'계좌이체', memo:`${e.name} 급여 (실수령)`, created: ex ? ex.created : now, updated: now};
+  if(e.member && e.member !== 'common' && catOwnerOf('income', cat) !== e.member) t.owner = e.member;
   delete S.deleted[id];
   if(ex) S.tx = S.tx.map(x => x.id === id ? t : x); else S.tx.push(t);
 }
@@ -1385,7 +1411,7 @@ function renderPay(){
       ${sl ? `<div class="pay-net"><span>실수령</span><b class="inc">${won(slipNet(sl))}원</b><small>지급 ${won(slipGross(sl))} − 공제 ${won(slipDed(sl))}${sl.date ? ` · ${sl.date.slice(5).replace('-','/')} 지급` : ''}</small></div>
         <div class="grid2 tight"><div><div class="pay-h">지급 항목</div>${rowsOf('earn')}<div class="pay-row tot"><span>지급 합계</span><span>${won(slipGross(sl))}</span></div></div>
         <div><div class="pay-h">공제 항목</div>${rowsOf('ded')}<div class="pay-row tot"><span>공제 합계</span><span>${won(slipDed(sl))}</span></div></div></div>
-        ${e.link ? `<p class="note">실수령액이 가계부 수입 '${esc(catFull(catName(e.incomeCat||'급여', e.member)))}'에 자동으로 기록돼요.</p>` : ''}`
+        ${e.link ? `<p class="note">실수령액이 가계부 수입 '${esc(catLabel(e.incomeCat||'급여'))}'에 ${e.member && e.member !== 'common' ? `'${esc(memName(e.member))}' 이름으로 ` : ''}자동으로 기록돼요.</p>` : ''}`
       : `<p class="note">급여 명세서의 지급·공제 항목을 그대로 입력하면 실수령액이 계산되고 가계부 수입에 자동으로 들어가요.${slipOf(e.id, addMonths(k,-1)) ? ' 지난달 명세를 복사해서 시작할 수 있어요.' : ''}</p>`}
     </section>
     <section class="card"><h3>${Y}년 급여 현황</h3>
@@ -1576,7 +1602,7 @@ function fillTxChips(cat, method){
 let ownerManual = false;
 function fillOwner(){
   const el = $('#fOwner'); if(!el) return;
-  const cur = radioVal('fOwner'), def = formType === 'saving' ? 'common' : catOwnerOf(formType, radioVal('fCat') || '');
+  const cur = radioVal('fOwner'), cdef = formType === 'saving' ? 'common' : catOwnerOf(formType, radioVal('fCat') || ''), def = cdef === 'common' && who !== 'all' ? who : cdef;
   const sel = ownerManual ? (cur || (editing && editing.owner) || def) : (editing && editing.owner && !cur ? editing.owner : def);
   el.innerHTML = S.members.map(m => `<label class="chip"><input type="radio" name="fOwner" value="${m.id}" ${m.id===sel?'checked':''}><span>${esc(m.name)}</span></label>`).join('');
 }
