@@ -177,9 +177,22 @@ section.card h3{margin:0 0 10px;font-size:15px}
   .sheet-panel{border-radius:20px}
 }
 /* 하단 탭 바 (업무 도구 스타일) */
-nav.tabs{justify-content:center;box-shadow:0 -4px 16px rgba(0,0,0,.05)}
-nav.tabs button{max-width:130px;padding:7px 0 9px;gap:2px}
-nav.tabs svg{width:22px;height:22px;padding:4px 16px;box-sizing:content-box;border-radius:999px;transition:background .15s}
+nav.tabs{justify-content:flex-start;box-shadow:0 -4px 16px rgba(0,0,0,.05);overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+nav.tabs::-webkit-scrollbar{display:none}
+nav.tabs button{flex:1 0 64px;max-width:110px;padding:7px 0 9px;gap:2px;white-space:nowrap}
+nav.tabs svg{width:22px;height:22px;padding:4px 12px;box-sizing:content-box;border-radius:999px;transition:background .15s}
+@media (min-width:1000px){nav.tabs{justify-content:center}}
+.todaybar{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 12px;margin-bottom:12px;border-radius:12px;background:var(--soft);font-size:13.5px;color:var(--muted)}
+.todaybar b{color:var(--ink)}
+.todaybar.away{background:#fff4e0;border:1px solid #f0d199}
+@media (prefers-color-scheme:dark){.todaybar.away{background:#3a3020;border-color:#6b5525}}
+/* 보험 */
+.ins-cov{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr) minmax(0,1fr) 32px;gap:4px;align-items:center;padding:4px 0;border-top:1px solid var(--line)}
+.ins-cov input,.ins-cov select{width:100%;min-width:0;padding:8px 6px;font-size:16px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.gap{color:var(--exp);font-weight:600;font-size:12px}
+.cmp td.c,.cmp th.c{text-align:right}
+.payday{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 12px;margin:8px 0;background:var(--soft);border-radius:12px;font-size:14px}
+.payday b{font-size:15px}
 nav.tabs button.on svg{background:var(--soft)}
 body{padding-bottom:calc(150px + env(safe-area-inset-bottom))}
 /* 분석 */
@@ -319,6 +332,8 @@ label.mini input{width:16px;height:16px;accent-color:var(--accent)}
       <button data-view="list"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>내역</button>
       <button data-view="fixed"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4M9 15l2 2 4-4"/></svg>예산·고정</button>
       <button data-view="assets"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v9l7 4"/></svg>자산</button>
+      <button data-view="debts"><svg viewBox="0 0 24 24"><path d="M3 10l9-6 9 6M5 10v8M10 10v8M14 10v8M19 10v8M3 20h18"/></svg>대출</button>
+      <button data-view="ins"><svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>보험</button>
       <button data-view="cards"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M7 15h4"/></svg>카드</button>
       <button data-view="pay"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2"/><circle cx="12" cy="12.5" r="2.5"/><path d="M6 9.5v.01M18 15.5v.01"/></svg>급여</button>
     </nav>
@@ -354,7 +369,7 @@ const fresh = () => ({
   cards: [{name:'카드', payDay:0, target:0}],
   recurring: [],
   assets: {cash:[], savings:[], stocks:[], use:[], debts:[]},
-  funds: [], pools: [], poolTx: [],
+  funds: [], pools: [], poolTx: [], ins: [],
   debtPlan: {monthly:0, ids:[], order:'rate', day:25},
   pay: payDefault(),
   members: [{id:'common', name:'공동'}, {id:'u1', name:'사용자1'}, {id:'u2', name:'사용자2'}, {id:'u3', name:'사용자3'}],
@@ -419,7 +434,7 @@ function migrate(d){
   s.groups = s.groups.filter(g => g && Array.isArray(g.cats)).map(g => ({id: g.id || uid(), name: String(g.name||'그룹'), fixed: !!g.fixed, cats: g.cats.map(String)}));
   if(!s.groups.length) s.groups = f.groups;
   if(!Array.isArray(s.recurring)) s.recurring = [];
-  for(const k of ['funds','pools','poolTx']) if(!Array.isArray(s[k])) s[k] = [];
+  for(const k of ['funds','pools','poolTx','ins']) if(!Array.isArray(s[k])) s[k] = [];
   if(!s.pay || typeof s.pay !== 'object') s.pay = payDefault();
   if(!Array.isArray(s.members) || s.members.length !== 4) s.members = f.members;
   if(!s.catOwner || typeof s.catOwner !== 'object') s.catOwner = {};
@@ -436,7 +451,7 @@ function migrate(d){
     if(type === 'expense'){ for(const r of s.recurring || []) if(r.cat === old) r.cat = nw; for(const f of s.funds || []) f.cats = (f.cats||[]).map(c => c === old ? nw : c); for(const pl of s.pools || []) pl.cats = (pl.cats||[]).map(c => c === old ? nw : c); }
     delete s.catOwner[key];
   }
-  { const pd = payDefault(); for(const k of ['earners','earn','ded','slips']) if(!Array.isArray(s.pay[k])) s.pay[k] = pd[k]; if(!s.pay.yet || typeof s.pay.yet !== 'object') s.pay.yet = {}; }
+  { const pd = payDefault(); for(const k of ['earners','earn','ded','slips']) if(!Array.isArray(s.pay[k])) s.pay[k] = pd[k]; if(!s.pay.yet || typeof s.pay.yet !== 'object') s.pay.yet = {}; if(!Array.isArray(s.pay.extraHol)) s.pay.extraHol = []; }
   if(!s.debtPlan || typeof s.debtPlan !== 'object') s.debtPlan = f.debtPlan;
   if(!Array.isArray(s.debtPlan.ids)) s.debtPlan.ids = [];
   s.cards = s.cards.map(c => ({name:String(c.name), payDay:+c.payDay||0, target:+c.target||0}));
@@ -590,11 +605,12 @@ function render(){
   $('#monthLabel').textContent = `${Y}년 ${M}월`;
   document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('on', b.dataset.view===view));
   renderSummary();
-  ({list:renderList, stats:renderStats, fixed:renderFixed, assets:renderAssets, cards:renderCards, settings:renderSettings, secret:renderSecret, pay:renderPay})[view]();
+  ({list:renderList, stats:renderStats, fixed:renderFixed, assets:renderAssets, debts:renderDebts, ins:renderIns, cards:renderCards, settings:renderSettings, secret:renderSecret, pay:renderPay})[view]();
   renderSelbar();
+  const on = document.querySelector('nav.tabs button.on'); if(on){ const n = on.parentElement; const l = on.offsetLeft, r = l + on.offsetWidth; if(l < n.scrollLeft || r > n.scrollLeft + n.clientWidth) n.scrollLeft = l - (n.clientWidth - on.offsetWidth) / 2; }
 }
 function renderSummary(){
-  if(['assets','secret','stats','pay'].includes(view)){ $('#summary').hidden = true; return; }
+  if(['assets','debts','ins','secret','stats','pay'].includes(view)){ $('#summary').hidden = true; return; }
   $('#summary').hidden = false;
   const {i,e,f,v,s} = sums(monthTx());
   $('#summary').innerHTML = `
@@ -741,7 +757,10 @@ function renderStats(){
   const up = scheduleHtml(k, true);
   const upc = `<section class="card"><div class="sec-head"><h3>다가오는 결제 일정 <small>2주</small></h3><button class="btn sm" data-view="fixed">전체 일정</button></div>
     ${up.ev.length ? up.html + `<div class="bar-cap"><span>나갈 돈 합계</span><b class="exp">${won(up.out)}원</b></div>` : '<p class="note">2주 안에 나갈 고정지출·카드 대금이 없어요. 예산·고정 탭에서 매달 나가는 항목과 카드 결제일을 등록하면 여기에 날짜별로 보여요.</p>'}</section>`;
+  const td = new Date();
+  const todayBar = `<div class="todaybar${cur ? '' : ' away'}"><span>오늘 <b>${td.getFullYear()}년 ${td.getMonth()+1}월 ${td.getDate()}일 (${DOW[td.getDay()]})</b>${cur ? ` · ${M}월 ${days - td.getDate()}일 남음` : ` · 지금 <b>${Y}년 ${M}월</b>을 보고 있어요`}</span>${cur ? '' : '<button class="btn sm primary" id="goToday">오늘로 이동</button>'}</div>`;
   $('#view').innerHTML = `
+    ${todayBar}
     ${nw}
     ${hero}
     ${upc}
@@ -1098,13 +1117,135 @@ function renderAssets(){
       <div class="alloc">${ks.map(k=>`<div><span><i class="dot" style="background:${AC[k].color}"></i> ${AC[k].label}</span><b>${short(t[k])} · ${gross?Math.round(t[k]/gross*100):0}%</b></div>`).join('')}</div>`
       : '<p class="note">계좌, 예적금, 주식, 집·차, 대출을 추가하면 자산 구성이 한눈에 보여요. 설정 → 엑셀 불러오기로 한 번에 가져올 수도 있어요.</p>'}
     </section>
-    ${[...ks, 'debts'].map(k=>`<section class="card">
+    ${ks.map(k=>`<section class="card">
       <div class="sec-head"><h3>${AC[k].label}<small>${won(k==='use' ? t.use - S.assets.use.reduce((s,u)=>s+linkedDebt(u),0) : k==='debts' ? debt : t[k])}원${k==='use'?' (시세−대출)':''}</small></h3><button class="btn sm" data-anew="${k}">+ ${AC[k].add}</button></div>
       ${S.assets[k].length ? S.assets[k].map(x=>assetRow(k,x)).join('') : '<p class="note">아직 없어요.</p>'}
     </section>`).join('')}
-    ${planHtml()}
+    <section class="card"><div class="sec-head"><h3>대출<small>${won(debt)}원</small></h3><button class="btn sm" data-view="debts">대출 관리 ›</button></div>
+      ${S.assets.debts.filter(d=>d.loan>0).map(d=>`<div class="arow" style="cursor:default"><span class="mid"><b>${esc(d.name)}</b><small>${esc(d.bank||'')}</small></span><span class="amt exp">${won(d.loan)}</span></div>`).join('') || '<p class="note">대출은 아래 대출 탭에서 추가·상환 관리해요.</p>'}
+    </section>
     ${poolsHtml()}
     <p class="note">자산 금액은 직접 입력한 값이에요(저축 내역은 해당 예적금 잔액에 자동 반영). 잔액·현재가·시세가 바뀌면 항목을 눌러 고쳐 주세요.</p>`;
+}
+
+/* ----- 대출 ----- */
+function renderDebts(){
+  const ds = S.assets.debts, k = curYm(), total = ds.reduce((s,x)=>s+(x.loan||0),0);
+  const paidM = ds.reduce((s,x)=>s+(x.repay||[]).filter(r=>r.date.startsWith(k)).reduce((a,r)=>a+r.principal,0),0);
+  const intM = ds.reduce((s,x)=>s+estInterest(x),0);
+  const monthly = S.recurring.filter(r => (r.loanId || r.planDebts) && (!r.end || r.end >= k)).reduce((s,r)=>s+r.amount,0);
+  const start = total + ds.reduce((s,x)=>s+(x.repay||[]).reduce((a,r)=>a+r.principal,0),0);
+  $('#view').innerHTML = `
+    <section class="card"><span class="muted">남은 대출 원금</span><b class="big exp">${won(total)}원</b>
+      <span class="muted">${ds.filter(d=>d.loan>0).length}건 · 이번 달 원금 상환 ${won(paidM)}원 · 월 이자 약 ${won(intM)}원</span>
+      ${monthly ? `<span class="muted">매달 상환 예정 ${won(monthly)}원 (고정지출에 자동 등록)</span>` : ''}
+      ${start > total ? `<div class="loanbar" style="margin-top:8px"><div style="width:${(start-total)/start*100}%"></div></div><span class="muted">기록된 상환 기준 ${Math.round((start-total)/start*100)}% 갚았어요</span>` : ''}
+    </section>
+    <section class="card"><div class="sec-head"><h3>대출 목록</h3><button class="btn sm" data-anew="debts">+ 대출 추가</button></div>
+      ${ds.length ? ds.map(x=>assetRow('debts',x)).join('') : '<p class="note">대출을 추가하면 남은 원금, 월 상환 목표, 완납 예정일을 관리할 수 있어요.</p>'}
+    </section>
+    ${planHtml()}
+    <p class="note">상환 기록을 남기면 남은 원금이 줄고, 자산 탭 순자산에도 바로 반영돼요.</p>`;
+}
+
+/* ----- 보험 (담보별 관리) ----- */
+const INS_CATS = ['사망','암진단','뇌혈관','심장질환','수술','입원','실손의료비','상해·후유장해','치아','운전자·배상','간병·치매','기타'];
+const INS_CORE = ['사망','암진단','뇌혈관','심장질환','실손의료비'];
+const INS_TYPES = ['보장성','실손','저축성','자동차','기타'];
+const INS_ST = {active:'유지', paidup:'납입 완료', stopped:'해지·만기'};
+const insList = () => S.ins || [];
+const insWhoOf = p => p.who || '미지정';
+function insEvents(){
+  const t = dstr(today0()), lim = dstr(new Date(today0().getTime() + 366*864e5)), ev = [];
+  for(const p of insList()) if(p.status !== 'stopped') for(const [f, l] of [['renew','갱신'],['payEnd','납입 종료'],['maturity','보장 만기']])
+    if(p[f] && p[f] >= t && p[f] <= lim) ev.push({date: p[f], label: l, p});
+  return ev.sort((a,b) => a.date.localeCompare(b.date));
+}
+// 연말정산 보장성 보험료(추정): 계약자가 그 사람인 유지 중 보험, 계약자 비어 있으면 첫 번째 급여자 몫
+function insYearPremium(e, y){
+  const first = payEarners()[0];
+  return insList().filter(p => p.status === 'active' && p.type !== '저축성' && ((p.payer || '') === e.name || (!p.payer && first && first.id === e.id))).reduce((s,p) => {
+    let n = 0; for(let m = 1; m <= 12; m++){ const k = `${y}-${pad(m)}`; if((!p.start || p.start.slice(0,7) <= k) && (!p.payEnd || p.payEnd.slice(0,7) >= k)) n++; }
+    return s + (p.premium||0) * n; }, 0);
+}
+function renderIns(){
+  const L = insList(), act = L.filter(p => p.status === 'active'), live = L.filter(p => p.status !== 'stopped');
+  const mon = act.reduce((s,p)=>s+(p.premium||0),0);
+  const whos = [...new Set(live.map(insWhoOf))];
+  const cov = (w, c) => live.filter(p => insWhoOf(p) === w).flatMap(p => (p.covers||[]).filter(x => x.cat === c)).reduce((s,x)=>s+(x.amount||0),0);
+  const cats = INS_CATS.filter(c => INS_CORE.includes(c) || whos.some(w => cov(w, c)));
+  const gaps = whos.map(w => [w, INS_CORE.filter(c => !cov(w, c))]).filter(([,g]) => g.length);
+  const ev = insEvents();
+  const sorted = [...L].sort((a,b) => (a.status==='stopped') - (b.status==='stopped') || insWhoOf(a).localeCompare(insWhoOf(b)) || a.name.localeCompare(b.name));
+  $('#view').innerHTML = `
+    <section class="card"><span class="muted">월 보험료 (유지 중)</span><b class="big">${won(mon)}원</b>
+      <span class="muted">연 ${won(mon*12)}원 · 유지 ${act.length}건${L.length - act.length ? ` · 납입완료·해지 ${L.length - act.length}건` : ''}</span>
+      ${whos.length ? `<div class="alloc" style="margin-top:8px">${whos.map(w => `<div><span>${esc(w)}</span><b>${won(act.filter(p => insWhoOf(p) === w).reduce((s,p)=>s+(p.premium||0),0))}</b></div>`).join('')}</div>` : ''}
+    </section>
+    ${live.length ? `<section class="card"><h3>보장 분석 <small>담보별 가입금액 합계</small></h3>
+      <div class="tbl-wrap"><table class="cmp"><tr><th>보장</th>${whos.map(w => `<th class="c">${esc(w)}</th>`).join('')}</tr>
+        ${cats.map(c => `<tr><td>${c}</td>${whos.map(w => { const v = cov(w, c); return `<td class="c">${v ? short(v) : INS_CORE.includes(c) ? '<span class="gap">공백</span>' : '–'}</td>`; }).join('')}</tr>`).join('')}
+      </table></div>
+      ${gaps.length ? `<p class="note">보장 공백 · ${gaps.map(([w,g]) => `<b>${esc(w)}</b> ${g.join(', ')}`).join(' / ')}</p>` : '<p class="note">핵심 보장(사망·암·뇌·심장·실손)이 모두 있어요.</p>'}
+      <p class="note">입원·수술처럼 일당·회당으로 받는 담보도 가입금액 그대로 더해서 보여줘요.</p></section>` : ''}
+    ${ev.length ? `<section class="card"><h3>다가오는 갱신·만기 <small>1년 이내</small></h3>
+      ${ev.map(x => `<div class="sch-row"><span class="sch-d"><b>${+x.date.slice(5,7)}/${+x.date.slice(8)}</b><small>${x.date.slice(2,4)}년</small></span><span class="mid"><b>${esc(x.p.name)}</b><small>${esc(insWhoOf(x.p))} · ${x.label} · ${ddTxt(dday(x.date))}</small></span><span class="amt"><small class="muted">${x.label === '갱신' ? '보험료 변동 확인' : ''}</small></span></div>`).join('')}</section>` : ''}
+    <section class="card"><div class="sec-head"><h3>가입한 보험</h3><button class="btn sm" id="insNew">+ 보험 추가</button></div>
+      ${sorted.length ? sorted.map(p => `<button class="arow" data-insedit="${p.id}"><span class="mid"><b>${esc(p.name)}<span class="tagk">${esc(p.type)}</span>${p.status !== 'active' ? `<span class="tagk mute">${INS_ST[p.status]}</span>` : ''}</b>
+          <small>${[p.company, insWhoOf(p), p.payDay ? `매월 ${p.payDay}일` : '', p.payEnd ? `납입 ~${p.payEnd.slice(0,7).replace('-','.')}` : '', p.maturity ? `만기 ${p.maturity.slice(0,4)}` : ''].filter(Boolean).map(esc).join(' · ')}</small>
+          <small>${(p.covers||[]).length ? p.covers.slice(0,3).map(c => `${esc(c.name || c.cat)} ${short(c.amount)}`).join(' · ') + (p.covers.length > 3 ? ` 외 ${p.covers.length - 3}개` : '') : '담보를 입력하면 보장 분석에 반영돼요'}</small></span>
+          <span class="amt">${won(p.premium)}<small class="muted">${p.fixed ? '월 · 고정지출' : '월'}</small></span></button>`).join('')
+        : '<p class="note">보험 증권을 보고 상품마다 담보(암진단비, 실손의료비 등)와 가입금액을 넣으면, 사람별 보장 내역과 빠진 보장을 한눈에 볼 수 있어요.</p>'}
+    </section>
+    <p class="note">유지 중인 보장성 보험료는 급여 탭 연말정산 미리보기의 보험료 공제에 자동으로 들어가요 (계약자 기준).</p>`;
+}
+const insCoverRow = c => `<div class="ins-cov"><select data-cv="cat" aria-label="보장 분류">${INS_CATS.map(x => `<option ${c.cat === x ? 'selected' : ''}>${x}</option>`).join('')}</select>
+  <input data-cv="name" maxlength="30" placeholder="담보명" value="${esc(c.name || '')}" aria-label="담보명">
+  <input data-cv="amount" inputmode="numeric" data-money placeholder="가입금액" value="${c.amount ? won(c.amount) : ''}" aria-label="가입금액">
+  <button type="button" class="icon sm" data-cvdel aria-label="삭제">×</button></div>`;
+function openIns(id){
+  const p = id ? insList().find(x => x.id === id) : null; ctx = {id: p ? p.id : null};
+  const v = (k, d = '') => p && p[k] != null && p[k] !== '' ? p[k] : d;
+  const people = [...new Set([...insList().map(x => x.who), ...insList().map(x => x.payer), ...payEarners().map(e => e.name)].filter(Boolean))];
+  showSheet(`${sheetHead(`보험 ${p ? '수정' : '추가'}`)}
+    <datalist id="insPeople">${people.map(w => `<option value="${esc(w)}">`).join('')}</datalist>
+    <label class="field"><span>상품명</span><input type="text" id="inName" maxlength="40" value="${esc(v('name'))}" placeholder="예: 건강보험, 실손보험"></label>
+    <div class="two"><label class="field"><span>보험사</span><input type="text" id="inCo" maxlength="20" value="${esc(v('company'))}"></label>
+      <label class="field"><span>종류</span><select id="inType">${INS_TYPES.map(t => `<option ${v('type','보장성') === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label></div>
+    <div class="two"><label class="field"><span>피보험자 (보장받는 사람)</span><input type="text" id="inWho" list="insPeople" maxlength="12" value="${esc(v('who'))}"></label>
+      <label class="field"><span>계약자 (내는 사람)</span><input type="text" id="inPayer" list="insPeople" maxlength="12" value="${esc(v('payer'))}"></label></div>
+    <div class="two"><label class="field"><span>월 보험료</span><input id="inPrem" inputmode="numeric" data-money value="${v('premium') ? won(p.premium) : ''}"></label>
+      <label class="field"><span>납입일 (매월)</span><input id="inDay" inputmode="numeric" maxlength="2" value="${v('payDay')}"></label></div>
+    <div class="two"><label class="field"><span>가입일</span><input type="date" id="inStart" value="${v('start')}"></label>
+      <label class="field"><span>납입 종료일</span><input type="date" id="inPayEnd" value="${v('payEnd')}"></label></div>
+    <div class="two"><label class="field"><span>보장 만기일</span><input type="date" id="inMat" value="${v('maturity')}"></label>
+      <label class="field"><span>다음 갱신일 (갱신형만)</span><input type="date" id="inRenew" value="${v('renew')}"></label></div>
+    <div class="two"><label class="field"><span>상태</span><select id="inSt">${Object.entries(INS_ST).map(([k,l]) => `<option value="${k}" ${v('status','active') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label class="field"><span>해지환급금 (현재)</span><input id="inRef" inputmode="numeric" data-money value="${v('refund') ? won(p.refund) : ''}"></label></div>
+    <div class="bk-g">가입 담보 <small class="muted">분류 · 담보명 · 가입금액</small></div>
+    <div id="inCovers">${(p ? p.covers || [] : [{cat:'암진단'}]).map(insCoverRow).join('')}</div>
+    <button type="button" class="btn sm" id="inCovAdd">+ 담보 추가</button>
+    <label class="ck"><input type="checkbox" id="inFixed" ${p && p.fixed ? 'checked' : ''}> 매달 고정지출(보험)로 자동 등록</label>
+    <label class="field"><span>메모</span><input type="text" id="inMemo" maxlength="80" value="${esc(v('memo'))}" placeholder="예: 설계사 연락처, 청구 방법"></label>
+    <div class="actions">${p ? '<button type="button" class="btn danger" id="inDel">삭제</button>' : ''}<button type="submit" class="btn primary">저장</button></div>`, 'ins');
+}
+function syncInsTemplate(p){
+  const id = 'ins-' + p.id, exist = S.recurring.find(r => r.id === id);
+  if(!p || p.gone || !p.fixed || p.status !== 'active' || !p.premium){ if(exist){ S.recurring = S.recurring.filter(r => r.id !== id); touchMeta(); } return; }
+  if(!S.cats.expense.includes('보험')) addExpenseCat('보험', '고정지출', true);
+  const o = {id, name: `${p.name} 보험료`, amount: p.premium, day: p.payDay || 25, cat: '보험', method: exist ? exist.method : (S.methods.includes('계좌이체') ? '계좌이체' : (S.methods[0] || '')), vary: false, start: (exist && exist.start) || curYm(), end: p.payEnd ? p.payEnd.slice(0,7) : ''};
+  S.recurring = exist ? S.recurring.map(r => r.id === id ? o : r) : [...S.recurring, o]; touchMeta();
+}
+function submitIns(){
+  const name = $('#inName').value.trim(); if(!name){ toast('상품명을 입력하세요'); return; }
+  const ex = ctx.id ? insList().find(x => x.id === ctx.id) : null;
+  const covers = [...document.querySelectorAll('#inCovers .ins-cov')].map(r => { const g = k => r.querySelector(`[data-cv="${k}"]`).value; return {cat: g('cat'), name: g('name').trim(), amount: digits(g('amount'))}; }).filter(c => c.name || c.amount);
+  const o = {id: ex ? ex.id : uid(), name, company: $('#inCo').value.trim(), type: $('#inType').value, who: $('#inWho').value.trim(), payer: $('#inPayer').value.trim(),
+    premium: digits($('#inPrem').value), payDay: Math.min(31, digits($('#inDay').value)), start: okDate($('#inStart').value), payEnd: okDate($('#inPayEnd').value),
+    maturity: okDate($('#inMat').value), renew: okDate($('#inRenew').value), status: $('#inSt').value, refund: digits($('#inRef').value), memo: $('#inMemo').value.trim(),
+    fixed: $('#inFixed').checked, covers, updated: Date.now()};
+  S.ins = ex ? S.ins.map(x => x.id === o.id ? o : x) : [...insList(), o];
+  syncInsTemplate(o); save(); closeSheet(); render(); toast('저장했어요');
 }
 
 /* ----- 카드 ----- */
@@ -1299,7 +1440,8 @@ function scheduleFor(k){
   }
   for(const e of payEarners()) if(e.payDay){
     const sl = slipOf(e.id, k);
-    ev.push({date: day(e.payDay), name: `${e.name} 급여일`, sub: '급여', amt: sl ? slipNet(sl) : 0, done: !!sl, kind: 'pay', inc: true});
+    const pd = sl && sl.date ? sl.date : payDateFor(e, k);
+    ev.push({date: pd, name: `${e.name} 급여일`, sub: pd !== payBase(e, k) && !(sl && sl.date) ? `급여 · ${+payBase(e, k).slice(8)}일이 휴일이라 앞당김` : '급여', amt: sl ? slipNet(sl) : 0, done: !!sl, kind: 'pay', inc: true});
   }
   for(const f of S.funds) for(const p of (f.plan || []).filter(p => p.m === m))
     ev.push({date: `${k}-01`, name: p.memo || `${f.name} 지출`, sub: `${f.name} (이달 중 · 적립통장)`, amt: p.amount, done: false, kind: 'fund', month: true});
@@ -1320,9 +1462,27 @@ function scheduleHtml(k, onlyUpcoming){
 }
 
 /* ================= 급여 ================= */
+/* 공휴일 (관공서 공휴일 · 대체공휴일 · 임시공휴일 포함). 표에 없는 해는 양력 고정 공휴일만 적용 */
+const KR_HOL = {
+  2026: '01-01 02-16 02-17 02-18 03-01 03-02 05-01 05-05 05-24 05-25 06-03 06-06 07-17 08-15 08-17 09-24 09-25 09-26 10-03 10-05 10-09 12-25',
+  2027: '01-01 02-06 02-07 02-08 02-09 03-01 05-01 05-03 05-05 05-13 06-06 07-17 07-19 08-15 08-16 09-14 09-15 09-16 10-03 10-04 10-09 10-11 12-25 12-27'
+};
+const KR_HOL_FIXED = '01-01 03-01 05-01 05-05 06-06 07-17 08-15 10-03 10-09 12-25';
+function isHoliday(ds){
+  const w = new Date(ds + 'T00:00:00').getDay(); if(w === 0 || w === 6) return true;
+  if((KR_HOL[ds.slice(0,4)] || KR_HOL_FIXED).split(' ').includes(ds.slice(5))) return true;
+  return ((S.pay && S.pay.extraHol) || []).includes(ds);
+}
+// 급여일: 매월 payDay일(말일 넘으면 말일), 주말·공휴일이면 그 전 평일로 앞당김
+function payDateFor(e, k){
+  const [y, m] = k.split('-').map(Number), d = new Date(y, m - 1, Math.min(e.payDay || 25, dim(y, m)));
+  if(e.holAdj !== false) for(let i = 0; i < 15 && isHoliday(dstr(d)); i++) d.setDate(d.getDate() - 1);
+  return dstr(d);
+}
+const payBase = (e, k) => { const [y, m] = k.split('-').map(Number); return `${k}-${pad(Math.min(e.payDay || 25, dim(y, m)))}`; };
 const PAY_ROLES = [['tax','소득세 (원천징수)'],['ltax','지방소득세'],['np','국민연금'],['hi','건강보험'],['ltc','장기요양보험'],['ei','고용보험'],['settle','연말정산 정산분'],['pension','개인연금 (연금저축)'],['other','기타 공제']];
 function payDefault(){
-  return {earners: [{id: 'me', name: '본인', hire: '', payDay: 25, incomeCat: '급여', link: true}],
+  return {earners: [{id: 'me', name: '본인', hire: '', payDay: 25, holAdj: true, incomeCat: '급여', link: true}], extraHol: [],
     earn: [{name:'기본급'},{name:'상여·성과금', bonus:true},{name:'초과근무수당'},{name:'연차수당', leave:true},{name:'휴가비', bonus:true},{name:'복지포인트'},{name:'식대', nontax:true},{name:'기타수당'}],
     ded: [{name:'소득세', role:'tax'},{name:'지방소득세', role:'ltax'},{name:'국민연금', role:'np'},{name:'건강보험', role:'hi'},{name:'장기요양보험', role:'ltc'},{name:'고용보험', role:'ei'},
           {name:'연말정산 소득세', role:'settle'},{name:'연말정산 지방세', role:'settle'},{name:'개인연금', role:'pension'},{name:'기타공제', role:'other'}],
@@ -1345,7 +1505,7 @@ function syncPayTx(sl){
   const ex = S.tx.find(t => t.id === id);
   if(!e || !e.link){ if(ex){ S.tx = S.tx.filter(t => t.id !== id); S.deleted[id] = Date.now(); } return; }
   const cat = catLabel(e.incomeCat || '급여'); if(!S.cats.income.includes(cat)){ S.cats.income.unshift(cat); touchMeta(); }
-  const now = Date.now(), t = {id, type:'income', amount: Math.max(0, slipNet(sl)), date: sl.date || `${sl.ym}-${pad(Math.min(e.payDay||25, dim(+sl.ym.slice(0,4), +sl.ym.slice(5))))}`, cat, method:'계좌이체', memo:`${e.name} 급여 (실수령)`, created: ex ? ex.created : now, updated: now};
+  const now = Date.now(), t = {id, type:'income', amount: Math.max(0, slipNet(sl)), date: sl.date || payDateFor(e, sl.ym), cat, method:'계좌이체', memo:`${e.name} 급여 (실수령)`, created: ex ? ex.created : now, updated: now};
 
   delete S.deleted[id];
   if(ex) S.tx = S.tx.map(x => x.id === id ? t : x); else S.tx.push(t);
@@ -1375,7 +1535,8 @@ function yetCalc(e, y, projectYear){
   const tot = f => { const a = sl.reduce((s,v)=>s+f(v),0); return a + (n ? a/n*rest : 0); };
   const g = Math.round(tot(slipTaxable)), withheld = Math.round(tot(s => slipRole(s,'tax'))), np = tot(s => slipRole(s,'np')), ins = tot(s => slipRole(s,'hi') + slipRole(s,'ltc') + slipRole(s,'ei'));
   const cardAuto = S.tx.filter(t => t.type === 'expense' && isCard(t.method) && t.date.startsWith(String(y))).reduce((s,t)=>s+t.amount,0);
-  const inp = {...x, credit: x.credit != null && x.credit !== '' ? x.credit : cardAuto};
+  const insAuto = insYearPremium(e, y);
+  const inp = {...x, credit: x.credit != null && x.credit !== '' ? x.credit : cardAuto, insurance: x.insurance != null && x.insurance !== '' ? x.insurance : insAuto};
   const ed = earnedDeduction(g), person = 1.5e6 * Math.max(1, +inp.persons || 1);
   const card = cardDeduction(g, inp);
   const subs = g <= 7e7 ? 0.4 * Math.min(3e6, +inp.subscription||0) : 0;
@@ -1420,6 +1581,8 @@ function renderPay(){
   const ysum = f => ys.reduce((s,v)=>s+f(v),0);
   $('#view').innerHTML = `
     <div class="sec-head" style="margin-bottom:10px">${es.length > 1 ? `<div class="seg">${es.map(x=>`<button data-payw="${x.id}" class="${x.id===e.id?'on':''}">${esc(x.name)}</button>`).join('')}</div>` : `<h3>${esc(e.name)} 급여</h3>`}<button class="btn sm" id="paySetup">급여 설정</button></div>
+    ${(() => { const pd = sl && sl.date ? sl.date : payDateFor(e, k), moved = !(sl && sl.date) && pd !== payBase(e, k);
+      return `<div class="payday"><span>급여일 <b>매월 ${e.payDay >= 31 ? '말일' : (e.payDay || 25) + '일'}</b> · ${M}월 지급일 <b>${+pd.slice(5,7)}/${+pd.slice(8)}(${DOW[new Date(pd + 'T00:00:00').getDay()]})</b>${moved ? `<br><small class="muted">${+payBase(e, k).slice(8)}일이 주말·공휴일이라 전날 평일로 앞당겼어요</small>` : ''}</span><button class="btn sm" id="payDayEdit">변경</button></div>`; })()}
     <section class="card"><div class="sec-head"><h3>${M}월 급여 명세</h3><button class="btn sm primary" id="slipEdit">${sl ? '수정' : '입력'}</button></div>
       ${sl ? `<div class="pay-net"><span>실수령</span><b class="inc">${won(slipNet(sl))}원</b><small>지급 ${won(slipGross(sl))} − 공제 ${won(slipDed(sl))}${sl.date ? ` · ${sl.date.slice(5).replace('-','/')} 지급` : ''}</small></div>
         <div class="grid2 tight"><div><div class="pay-h">지급 항목</div>${rowsOf('earn')}<div class="pay-row tot"><span>지급 합계</span><span>${won(slipGross(sl))}</span></div></div>
@@ -1467,12 +1630,31 @@ function renderPay(){
           <p class="note">${sv.n3 < 3 && !e.sevWage3 ? '최근 3개월 급여 명세가 부족해요. 설정에서 3개월 임금을 직접 넣으면 정확해져요. ' : ''}퇴직소득세는 빠진 세전 금액이고, DC형 퇴직연금이면 실제 금액은 회사 적립금 기준이에요.</p>`}
     </section>`;
 }
+function openPayDay(){
+  const e = curEarner(); ctx = {earner: e.id};
+  const k0 = curYm(), list = Array.from({length: 6}, (_, i) => addMonths(k0, i));
+  showSheet(`${sheetHead(`${esc(e.name)} 급여일`)}
+    <label class="field"><span>매월 급여일 (31 = 말일)</span><input inputmode="numeric" maxlength="2" id="pdDay" value="${e.payDay || 25}"></label>
+    <label class="ck"><input type="checkbox" id="pdAdj" ${e.holAdj !== false ? 'checked' : ''}> 주말·공휴일이면 전날 평일로 자동 앞당기기</label>
+    <div class="bk-g">앞으로 6개월 지급일 <small class="muted">(현재 설정 기준)</small></div>
+    ${list.map(k => { const pd = payDateFor(e, k), b = payBase(e, k); return `<div class="pay-row"><span>${ymTxt(k)}</span><span>${+pd.slice(5,7)}/${+pd.slice(8)}(${DOW[new Date(pd + 'T00:00:00').getDay()]})${pd !== b ? ' <small class="muted">앞당김</small>' : ''}</span></div>`; }).join('')}
+    <label class="field"><span>추가 휴일 (회사 창립기념일 등 · 한 줄에 하나, 예: 2026-12-31)</span><textarea id="pdExtra" rows="3" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit;font-size:16px;background:var(--card)">${(S.pay.extraHol || []).join('\n')}</textarea></label>
+    <p class="note">공휴일은 2026·2027년 관공서 공휴일(대체·임시공휴일 포함)이 들어 있어요. 그 밖의 해는 설·추석 등 음력 공휴일이 빠지니 추가 휴일에 넣어 주세요. 이미 입력한 달의 명세는 명세의 지급일을 따라요.</p>
+    <div class="actions"><button type="submit" class="btn primary">저장</button></div>`, 'payday');
+}
+function submitPayDay(){
+  const e = payEarners().find(x => x.id === ctx.earner); if(!e) return;
+  e.payDay = Math.max(1, Math.min(31, digits($('#pdDay').value) || 25)); e.holAdj = $('#pdAdj').checked;
+  S.pay.extraHol = [...new Set($('#pdExtra').value.split(/[\s,]+/).map(x => x.trim()).filter(x => okDate(x)))].sort();
+  for(const s of S.pay.slips) if(s.earner === e.id) syncPayTx(s);
+  touchMeta(); save(); closeSheet(); render(); toast('급여일을 저장했어요');
+}
 function openSlip(){
   const e = curEarner(); const k = ym(); const sl = slipOf(e.id, k); const prev = slipOf(e.id, addMonths(k, -1));
   ctx = {earner: e.id, ym: k};
   const field = (part, it) => `<div class="bk-row"><span>${esc(it.name)}${it.nontax ? ' <small>비과세</small>' : ''}</span><small>${prev && +((prev[part]||{})[it.name]) ? '지난달 ' + short(prev[part][it.name]) : ''}</small><input inputmode="numeric" data-money data-slip="${part}" data-nm="${esc(it.name)}" value="${sl && +((sl[part]||{})[it.name]) ? won(sl[part][it.name]) : ''}"></div>`;
   showSheet(`${sheetHead(`${esc(e.name)} · ${M}월 급여 명세`)}
-    <div class="two"><label class="field"><span>지급일</span><input type="date" id="slDate" value="${sl && sl.date ? sl.date : `${k}-${pad(Math.min(e.payDay||25, dim(Y,M)))}`}"></label>
+    <div class="two"><label class="field"><span>지급일</span><input type="date" id="slDate" value="${sl && sl.date ? sl.date : payDateFor(e, k)}"></label>
       <div class="field"><span>&nbsp;</span>${prev ? '<button type="button" class="btn sm" id="slCopy">지난달 명세 복사</button>' : ''}</div></div>
     <div class="bk-g">지급 항목</div>${S.pay.earn.map(it => field('earn', it)).join('')}
     <div class="bk-g">공제 항목</div>${S.pay.ded.map(it => field('ded', it)).join('')}
@@ -1497,8 +1679,9 @@ function openPaySetup(){
     <div class="bk-g">급여 받는 사람</div>
     ${es.map(e => `<div class="pay-set"><div class="two"><label class="field"><span>이름</span><input type="text" maxlength="12" data-pe="${e.id}" data-f="name" value="${esc(e.name)}"></label>
         <label class="field"><span>입사일</span><input type="date" data-pe="${e.id}" data-f="hire" value="${e.hire||''}"></label></div>
-      <div class="two"><label class="field"><span>급여일 (매월)</span><input inputmode="numeric" maxlength="2" data-pe="${e.id}" data-f="payDay" value="${e.payDay||''}"></label>
+      <div class="two"><label class="field"><span>급여일 (매월)</span><input inputmode="numeric" maxlength="2" data-pe="${e.id}" data-f="payDay" placeholder="31 = 말일" value="${e.payDay||''}"></label>
         <label class="field"><span>수입 카테고리</span><input type="text" maxlength="20" data-pe="${e.id}" data-f="incomeCat" value="${esc(e.incomeCat||'급여')}"></label></div>
+      <label class="ck"><input type="checkbox" data-pe="${e.id}" data-f="holAdj" ${e.holAdj !== false ? 'checked' : ''}> 급여일이 주말·공휴일이면 전날 평일로 앞당기기</label>
       <label class="ck"><input type="checkbox" data-pe="${e.id}" data-f="link" ${e.link ? 'checked' : ''}> 실수령액을 가계부 수입에 자동 기록</label>
       ${es.length > 1 ? `<button type="button" class="btn sm danger" data-pedel="${e.id}">이 사람 삭제</button>` : ''}</div>`).join('')}
     <button type="button" class="btn sm" id="peAdd">+ 사람 추가</button>
@@ -1517,7 +1700,7 @@ function openPaySetup(){
 function submitPaySetup(){ applyPaySetup(); for(const s of S.pay.slips) syncPayTx(s); touchMeta(); save(); closeSheet(); render(); toast('급여 설정을 저장했어요'); }
 function applyPaySetup(){
   for(const i of document.querySelectorAll('[data-pe]')){ const e = S.pay.earners.find(x => x.id === i.dataset.pe); if(!e) continue; const f = i.dataset.f;
-    e[f] = f === 'link' ? i.checked : f === 'payDay' ? Math.min(31, digits(i.value)) : f === 'hire' ? okDate(i.value) : f === 'incomeCat' ? catLabel(i.value.replace(/@/g,'').trim()) : i.value.trim(); if(f === 'name' && !e.name) e.name = '이름'; }
+    e[f] = f === 'link' || f === 'holAdj' ? i.checked : f === 'payDay' ? Math.min(31, digits(i.value)) : f === 'hire' ? okDate(i.value) : f === 'incomeCat' ? catLabel(i.value.replace(/@/g,'').trim()) : i.value.trim(); if(f === 'name' && !e.name) e.name = '이름'; }
   for(const i of document.querySelectorAll('[data-pi]')){ const it = S.pay.earn[+i.dataset.pi], nw = i.value.trim(); if(it && nw && nw !== it.name){ for(const s of S.pay.slips) if(s.earn && s.earn[it.name] != null){ s.earn[nw] = s.earn[it.name]; delete s.earn[it.name]; s.updated = Date.now(); } it.name = nw; } }
   for(const i of document.querySelectorAll('[data-pif]')) S.pay.earn[+i.dataset.pif][i.dataset.k] = i.checked;
   for(const i of document.querySelectorAll('[data-pd]')){ const it = S.pay.ded[+i.dataset.pd], nw = i.value.trim(); if(it && nw && nw !== it.name){ for(const s of S.pay.slips) if(s.ded && s.ded[it.name] != null){ s.ded[nw] = s.ded[it.name]; delete s.ded[it.name]; s.updated = Date.now(); } it.name = nw; } }
@@ -1525,14 +1708,14 @@ function applyPaySetup(){
 }
 const YET_F = [['persons','인적공제 인원 (본인 포함 부양가족)','int'],['kidsAll','기본공제 자녀 수 (카드 한도 상향)','int'],['kids8','8세 이상 자녀 수 (자녀세액공제)','int'],
   ['credit','신용카드 사용액 (비우면 가계부 카드 내역)','money'],['debit','체크카드·현금영수증','money'],['market','전통시장','money'],['transit','대중교통','money'],['culture','도서·공연·체육시설 등 문화','money'],
-  ['insurance','보장성 보험료','money'],['medical','의료비','money'],['education','교육비','money'],['donation','기부금','money'],['pension','연금저축 납입액','money'],['irp','IRP·퇴직연금 납입액','money'],
+  ['insurance','보장성 보험료 (비우면 보험 탭)','money'],['medical','의료비','money'],['education','교육비','money'],['donation','기부금','money'],['pension','연금저축 납입액','money'],['irp','IRP·퇴직연금 납입액','money'],
   ['rent','월세 (무주택)','money'],['housing','주택자금 소득공제액 (직접 계산값)','money'],['subscription','주택청약 납입액 (무주택 세대주)','money'],['birthCredit','출산·입양 세액공제액','money']];
 function openYet(){
   const e = curEarner(); const x = yetInputs(e.id, Y);
   ctx = {key: e.id + '-' + Y};
   showSheet(`${sheetHead(`${esc(e.name)} · ${Y}년 귀속 공제 항목`)}
     <p class="note">1년 예상치를 넣어 보세요. 급여에서 총급여·4대보험·기납부세액은 자동으로 가져와요.</p>
-    <div class="two">${YET_F.map(([k,l,t]) => `<label class="field"><span>${l}</span><input inputmode="numeric" ${t==='money'?'data-money':''} data-yet="${k}" value="${x[k] != null && x[k] !== '' ? (t==='money' ? won(x[k]) : x[k]) : ''}" placeholder="${k==='credit' ? '자동' : '0'}"></label>`).join('')}</div>
+    <div class="two">${YET_F.map(([k,l,t]) => `<label class="field"><span>${l}</span><input inputmode="numeric" ${t==='money'?'data-money':''} data-yet="${k}" value="${x[k] != null && x[k] !== '' ? (t==='money' ? won(x[k]) : x[k]) : ''}" placeholder="${k==='credit' || k==='insurance' ? '자동' : '0'}"></label>`).join('')}</div>
     <label class="ck"><input type="checkbox" id="yMar" ${x.marriage ? 'checked' : ''}> 결혼세액공제 (해당 연도 혼인신고 · 50만 원)</label>
     <div class="actions"><button type="submit" class="btn primary">계산하기</button></div>`, 'yet');
 }
@@ -1679,7 +1862,7 @@ function openAsset(kind, item){
   showSheet(`${sheetHead(`${AC[kind].label} ${item?'수정':'추가'}`)}
     ${AF[kind].map(([k,l,t,o]) => fieldHtml(k, l, t, o, item ? item[k] : undefined)).join('')}
     ${kind==='use'&&item&&item.valueDate?`<p class="note">시세 기준일: ${item.valueDate} (시세를 고치면 오늘 날짜로 바뀌어요)</p>`:''}
-    ${kind==='debts'?'<p class="note">여러 대출을 한꺼번에 계획하려면 자산 탭 아래 \'대출 통합 상환 계획\'을 쓰세요. 통합 계획에 넣은 대출은 개별 목표 대신 통합 계획을 따라요.</p>':''}
+    ${kind==='debts'?'<p class="note">여러 대출을 한꺼번에 계획하려면 대출 탭의 \'대출 통합 상환 계획\'을 쓰세요. 통합 계획에 넣은 대출은 개별 목표 대신 통합 계획을 따라요.</p>':''}
     ${extra}
     <div class="actions">${item?'<button type="button" class="btn danger" id="aDel">삭제</button>':''}<button type="submit" class="btn primary">저장</button></div>`, 'asset');
 }
@@ -1891,7 +2074,7 @@ function submitPoolEnt(){
 $('#sheetForm').addEventListener('submit', e => {
   e.preventDefault();
   ({tx:submitTx, asset:submitAsset, repay:submitRepay, rec:submitRec, fxpay:submitFxPay, plan:submitPlan, planpay:submitPlanPay,
-    fund:submitFund, pool:submitPool, poolent:submitPoolEnt, budget:submitBudget, slip:submitSlip, paysetup:submitPaySetup, yet:submitYet, sev:submitSev, pin:submitPin, sec:submitSec, pocket:submitPocket, newpin:submitNewPin, xl:applyXl})[mode]?.();
+    fund:submitFund, pool:submitPool, poolent:submitPoolEnt, budget:submitBudget, slip:submitSlip, payday:submitPayDay, ins:submitIns, paysetup:submitPaySetup, yet:submitYet, sev:submitSev, pin:submitPin, sec:submitSec, pocket:submitPocket, newpin:submitNewPin, xl:applyXl})[mode]?.();
 });
 
 /* ================= 백업 · 동기화 (AES-GCM 암호화) ================= */
@@ -2001,6 +2184,11 @@ function merge(inc){
   let assetsChanged = 0;
   for(const k of ASSET_KINDS){ const m = mergeList(S.assets[k], inc.assets[k], del, cleanAsset[k]); S.assets[k] = m.list; assetsChanged += m.a + m.u; }
   S.poolTx = mergeList(S.poolTx, inc.poolTx, del, cleanPoolTx).list;
+  const cleanIns = x => { const id = okId(x); if(!id) return null; const n = v => Math.max(0, Math.round(num(v)));
+    return {id, name: str(x.name,40) || '보험', company: str(x.company,20), type: INS_TYPES.includes(x.type) ? x.type : '기타', who: str(x.who,12), payer: str(x.payer,12), premium: n(x.premium), payDay: Math.min(31, n(x.payDay)),
+      start: okDate(x.start), payEnd: okDate(x.payEnd), maturity: okDate(x.maturity), renew: okDate(x.renew), status: INS_ST[x.status] ? x.status : 'active', refund: n(x.refund), memo: str(x.memo,80), fixed: !!x.fixed,
+      covers: (Array.isArray(x.covers) ? x.covers : []).filter(c => c && typeof c === 'object').slice(0,80).map(c => ({cat: INS_CATS.includes(c.cat) ? c.cat : '기타', name: str(c.name,30), amount: n(c.amount)})), updated: num(x.updated)}; };
+  S.ins = mergeList(insList(), inc.ins, del, cleanIns).list;
   const cleanSlip = x => { const id = okId(x); if(!id || !/^\d{4}-\d{2}$/.test(x.ym) || typeof x.earner !== 'string') return null; const m = o => Object.fromEntries(Object.entries(o && typeof o === 'object' ? o : {}).filter(([,v]) => Number.isFinite(+v)).map(([k,v]) => [str(k,20), Math.round(+v)]));
     return {id, earner: x.earner.slice(0,60), ym: x.ym, date: okDate(x.date), earn: m(x.earn), ded: m(x.ded), updated: num(x.updated)}; };
   S.pay.slips = mergeList(S.pay.slips, (inc.pay||{}).slips, del, cleanSlip).list;
@@ -2022,10 +2210,11 @@ function merge(inc){
     if(Array.isArray(inc.members) && inc.members.length === 4) S.members = MEM_IDS.map((id,i) => ({id, name: str((inc.members.find(m => m && m.id === id) || {}).name, 10) || ['공동','사용자1','사용자2','사용자3'][i]}));
 
     if(inc.pay && Array.isArray(inc.pay.earners) && inc.pay.earners.length){
-      S.pay.earners = inc.pay.earners.filter(e => e && typeof e.id === 'string').map(e => ({id: e.id.slice(0,60), name: str(e.name,12), hire: okDate(e.hire), payDay: Math.min(31, Math.round(num(e.payDay))), incomeCat: str(e.incomeCat,20) || '급여', member: MEM_IDS.includes(e.member) ? e.member : 'common', link: !!e.link,
+      S.pay.earners = inc.pay.earners.filter(e => e && typeof e.id === 'string').map(e => ({id: e.id.slice(0,60), name: str(e.name,12), hire: okDate(e.hire), payDay: Math.min(31, Math.round(num(e.payDay))), holAdj: e.holAdj !== false, incomeCat: str(e.incomeCat,20) || '급여', member: MEM_IDS.includes(e.member) ? e.member : 'common', link: !!e.link,
         sevWage3: e.sevWage3 ? Math.round(num(e.sevWage3)) : '', sevBonus: e.sevBonus === '' || e.sevBonus == null ? '' : Math.round(num(e.sevBonus)), sevLeave: e.sevLeave === '' || e.sevLeave == null ? '' : Math.round(num(e.sevLeave))}));
       if(Array.isArray(inc.pay.earn)) S.pay.earn = inc.pay.earn.filter(x => x && x.name).map(x => ({name: str(x.name,20), nontax: !!x.nontax, bonus: !!x.bonus, leave: !!x.leave}));
       if(Array.isArray(inc.pay.ded)) S.pay.ded = inc.pay.ded.filter(x => x && x.name).map(x => ({name: str(x.name,20), role: PAY_ROLES.some(r => r[0] === x.role) ? x.role : 'other'}));
+      if(Array.isArray(inc.pay.extraHol)) S.pay.extraHol = inc.pay.extraHol.filter(x => okDate(x)).slice(0,100);
       if(inc.pay.yet && typeof inc.pay.yet === 'object') S.pay.yet = JSON.parse(JSON.stringify(inc.pay.yet, (k, v) => typeof v === 'string' && v.length > 40 ? '' : v));
     }
     S.metaAt = +inc.metaAt;
@@ -2539,6 +2728,7 @@ document.addEventListener('click', e => {
   if(el('#prev')){ if(--M<1){M=12;Y--;} render(); return; }
   if(el('#next')){ if(++M>12){M=1;Y++;} render(); return; }
   if(el('#monthLabel')){ if(lpFired){ lpFired = false; return; } const n=new Date(); Y=n.getFullYear(); M=n.getMonth()+1; render(); return; }
+  if(el('#goToday')){ const n = new Date(); Y = n.getFullYear(); M = n.getMonth()+1; render(); window.scrollTo(0,0); return; }
   if(el('#fab')){ openTx(); return; }
   if(el('#budgetSetup')){ openBudget(); return; }
   if((b = el('[data-who]'))){ who = b.dataset.who; render(); return; }
@@ -2547,6 +2737,13 @@ document.addEventListener('click', e => {
   if((b = el('[data-payw]'))){ payWho = b.dataset.payw; render(); return; }
   if(el('#paySetup')){ openPaySetup(); return; }
   if(el('#slipEdit')){ openSlip(); return; }
+  if(el('#payDayEdit')){ openPayDay(); return; }
+  if(el('#insNew')){ openIns(); return; }
+  if((b = el('[data-insedit]'))){ openIns(b.dataset.insedit); return; }
+  if(el('#inCovAdd')){ $('#inCovers').insertAdjacentHTML('beforeend', insCoverRow({})); const r = $('#inCovers').lastElementChild; r.querySelector('[data-cv="name"]').focus(); return; }
+  if((b = el('[data-cvdel]'))){ b.closest('.ins-cov').remove(); return; }
+  if(el('#inDel')){ const p = insList().find(x => x.id === ctx.id); if(!p || !confirm(`'${p.name}' 보험을 삭제할까요?`)) return;
+    S.ins = S.ins.filter(x => x !== p); S.deleted[p.id] = Date.now(); syncInsTemplate({...p, gone: true}); save(); closeSheet(); render(); toast('삭제했어요'); return; }
   if(el('#yetEdit')){ openYet(); return; }
   if(el('#sevEdit')){ openSev(); return; }
   if(el('#slCopy')){ const e = curEarner(), pv = slipOf(e.id, addMonths(ym(), -1)); if(!pv) return;
@@ -2556,7 +2753,7 @@ document.addEventListener('click', e => {
   if(el('#slDel')){ const sl = slipOf(ctx.earner, ctx.ym); if(!sl || !confirm('이 달 급여 명세를 삭제할까요? (가계부 수입 기록도 함께)')) return;
     S.pay.slips = S.pay.slips.filter(x => x !== sl); S.deleted[sl.id] = Date.now(); const tid = 'pay-' + sl.id; if(S.tx.some(t => t.id === tid)){ S.tx = S.tx.filter(t => t.id !== tid); S.deleted[tid] = Date.now(); }
     save(); closeSheet(); render(); return; }
-  if(el('#peAdd')){ applyPaySetup(); S.pay.earners.push({id: uid(), name: '배우자', hire: '', payDay: 25, incomeCat: '급여', link: true}); openPaySetup(); return; }
+  if(el('#peAdd')){ applyPaySetup(); S.pay.earners.push({id: uid(), name: '배우자', hire: '', payDay: 25, holAdj: true, incomeCat: '급여', link: true}); openPaySetup(); return; }
   if((b = el('[data-pedel]'))){ if(!confirm('이 사람과 급여 명세를 모두 삭제할까요?')) return; applyPaySetup(); const id = b.dataset.pedel; const now = Date.now();
     for(const sl of S.pay.slips.filter(x => x.earner === id)){ S.deleted[sl.id] = now; const tid = 'pay-' + sl.id; S.tx = S.tx.filter(t => t.id !== tid); S.deleted[tid] = now; }
     S.pay.slips = S.pay.slips.filter(x => x.earner !== id); S.pay.earners = S.pay.earners.filter(x => x.id !== id); payWho = null; openPaySetup(); return; }
